@@ -1,0 +1,92 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --color-ink: #050509;
+}
+
+html {
+  color-scheme: dark;
+  background: var(--color-ink);
+}
+
+body {
+  margin: 0;
+  min-height: 100dvh;
+  background: var(--color-ink);
+  color: #f3f4f6;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* soft aurora background, like the identity page */
+.aurora {
+  position: fixed;
+  inset: -40%;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(40% 40% at 25% 30%, rgba(59, 130, 246, 0.16), transparent 70%),
+    radial-gradient(45% 45% at 80% 60%, rgba(139, 92, 246, 0.12), transparent 70%),
+    radial-gradient(30% 30% at 45% 85%, rgba(16, 185, 129, 0.09), transparent 70%);
+  filter: blur(40px);
+  animation: drift 24s ease-in-out infinite alternate;
+}
+@keyframes drift {
+  from { transform: translate(0, 0) rotate(0deg); }
+  to { transform: translate(3%, -2%) rotate(6deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .aurora { animation: none; }
+}
+
+.glass {
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+.glass-hover:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.field {
+  width: 100%;
+  border-radius: 0.75rem;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 0.75rem 1rem;
+  color: #f3f4f6;
+  outline: none;
+}
+.field:focus { border-color: rgba(96, 165, 250, 0.6); }
+.field::placeholder { color: #6b7280; }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1.1rem;
+  border-radius: 0.6rem;
+  border: 1px solid rgba(96, 165, 250, 0.4);
+  color: #bfdbfe;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  transition: all 0.25s;
+}
+.btn:hover:not(:disabled) { border-color: #93c5fd; color: #fff; background: rgba(96, 165, 250, 0.1); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-quiet {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: #6b7280;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  transition: color 0.2s;
+}
+.btn-quiet:hover:not(:disabled) { color: #e5e7eb; }
+.btn-quiet:disabled { opacity: 0.4; }

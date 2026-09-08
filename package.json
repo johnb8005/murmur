@@ -1,0 +1,38 @@
+{
+  "name": "murmur",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev:web": "vite dev",
+    "dev:api": "bun --watch server/index.ts",
+    "dev": "bun run dev:api & bun run dev:web",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "start": "bun server/index.ts"
+  },
+  "dependencies": {
+    "@libsql/client": "0.18.0",
+    "@orpc/client": "1.15.0",
+    "@orpc/openapi": "1.15.0",
+    "@orpc/server": "1.15.0",
+    "@simplewebauthn/browser": "^14.0.0",
+    "@simplewebauthn/server": "^14.0.1",
+    "playwright": "^1.63.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router-dom": "^7.9.1",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.0",
+    "@types/bun": "^1.4.1",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^6.0.0",
+    "tailwindcss": "^4.1.0",
+    "vite": "^8.0.0",
+    "vite-plugin-pwa": "^1.0.0",
+    "workbox-window": "^7.4.1"
+  },
+  "type": "module"
+}
