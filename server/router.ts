@@ -229,6 +229,12 @@ const logout = base
     return { ok: true as const };
   });
 
+const updateProfile = authed
+  .route({ method: "PATCH", path: "/auth/me", summary: "Change my username and/or display name" })
+  .input(z.object({ username: Username.optional(), displayName: z.string().max(auth.DISPLAY_NAME_MAX).optional() }))
+  .output(z.object({ user: AuthorSchema }))
+  .handler(({ input, context }) => guard(async () => ({ user: await auth.updateProfile(context.user, input) })));
+
 const addPasskeyOptions = authed
   .route({ method: "POST", path: "/auth/passkeys/options", summary: "Start adding a passkey to my account" })
   .output(z.object({ challengeId: z.string(), options: WebAuthnJson }))
@@ -278,9 +284,11 @@ const create = authed
   .handler(async ({ input, context }) => {
     const id = auth.newId();
     const { link, ref } = extractLinks(input.text);
+    const createdAt = now();
+    // `date` is a leftover from the single-admin version; databases created by it have it NOT NULL
     await db.execute({
-      sql: `INSERT INTO posts (id, user_id, text, link, ref, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-      args: [id, context.user.id, input.text, link, ref, now()],
+      sql: `INSERT INTO posts (id, user_id, date, text, link, ref, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      args: [id, context.user.id, createdAt.slice(0, 10), input.text, link, ref, createdAt],
     });
     const previews = await ensurePreviews([link, ref].filter((u): u is string => !!u));
     const [post] = await loadPosts({ viewerId: context.user.id, id, limit: 1 });
@@ -374,7 +382,7 @@ const refresh = authed
 
 export const router = {
   health,
-  auth: { status, checkUsername, registerOptions, register, loginOptions, login, logout, addPasskeyOptions, addPasskey, passkeys, removePasskey },
+  auth: { status, checkUsername, registerOptions, register, loginOptions, login, logout, updateProfile, addPasskeyOptions, addPasskey, passkeys, removePasskey },
   posts: { list, get, create, delete: remove, like, comment, deleteComment },
   users: { get: getUser },
   previews: { refresh },

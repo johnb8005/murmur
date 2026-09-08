@@ -66,6 +66,34 @@ export const userById = async (id: string): Promise<Author | null> => {
 
 export const usernameAvailable = async (username: string) => (await userByUsername(username)) === null;
 
+export const DISPLAY_NAME_MAX = 40;
+
+/**
+ * Change username and/or display name. The username keeps the same rules as at registration and
+ * must still be unique; posts, likes, comments and passkeys follow the user id, so nothing else
+ * moves. Old profile URLs (/u/<old>) stop resolving.
+ */
+export const updateProfile = async (user: Author, changes: { username?: string; displayName?: string }): Promise<Author> => {
+  const next = { ...user };
+  if (changes.username !== undefined) {
+    const u = validateUsername(changes.username);
+    if (u !== user.username && !(await usernameAvailable(u))) throw new AuthError("that username is taken");
+    next.username = u;
+  }
+  if (changes.displayName !== undefined) {
+    const d = changes.displayName.trim().replace(/\s+/g, " ");
+    if (!d || d.length > DISPLAY_NAME_MAX) throw new AuthError(`display name: 1 to ${DISPLAY_NAME_MAX} characters`);
+    next.displayName = d;
+  }
+  try {
+    await db.execute({ sql: `UPDATE users SET username = ?, display_name = ? WHERE id = ?`, args: [next.username, next.displayName, user.id] });
+  } catch (e) {
+    if (/UNIQUE/i.test(String((e as Error)?.message))) throw new AuthError("that username is taken");
+    throw e;
+  }
+  return next;
+};
+
 export const isOwner = (user: Author | null | undefined) => !!user && user.username === OWNER_USERNAME;
 
 /** Posts from the single-admin version have no user: hand them to the owner once they exist. */

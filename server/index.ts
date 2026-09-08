@@ -2,6 +2,7 @@
 // Open Graph tags on post and profile URLs so WhatsApp, Slack and friends show a card.
 
 import path from "node:path";
+import { ORPCError } from "@orpc/server";
 import { RPCHandler } from "@orpc/server/fetch";
 import { ResponseHeadersPlugin } from "@orpc/server/plugins";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
@@ -17,9 +18,20 @@ const SITE_URL = (process.env.SITE_URL || "https://murmur.johanboissard.me").rep
 const DESCRIPTION = "Links worth sharing, from people worth following. No algorithm.";
 const feedOptions: FeedOptions = { siteUrl: SITE_URL, title: APP_NAME, description: DESCRIPTION };
 
-// ResponseHeadersPlugin hands procedures a `resHeaders` Headers object (used for set-cookie)
-const rpc = new RPCHandler(router, { plugins: [new ResponseHeadersPlugin()] });
-const api = new OpenAPIHandler(router, { plugins: [new ResponseHeadersPlugin()] });
+// ResponseHeadersPlugin hands procedures a `resHeaders` Headers object (used for set-cookie).
+// onError: oRPC turns unexpected exceptions into a bare 500; log them so Cloud Run shows the cause.
+const logError = (pathname: string, error: unknown) => {
+  if (error instanceof ORPCError && error.status < 500) return; // expected: 400/401/403/404
+  console.error(`[${pathname}]`, error instanceof Error ? (error.stack ?? error.message) : error);
+};
+const rpc = new RPCHandler(router, {
+  plugins: [new ResponseHeadersPlugin()],
+  interceptors: [async (o) => { try { return await o.next(); } catch (e) { logError(o.request.url.pathname, e); throw e; } }],
+});
+const api = new OpenAPIHandler(router, {
+  plugins: [new ResponseHeadersPlugin()],
+  interceptors: [async (o) => { try { return await o.next(); } catch (e) { logError(o.request.url.pathname, e); throw e; } }],
+});
 
 const contextFrom = (req: Request): Context => {
   const m = /^Bearer\s+(.+)$/i.exec(req.headers.get("authorization") || "");
