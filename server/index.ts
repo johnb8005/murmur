@@ -110,9 +110,7 @@ const server = Bun.serve({
     const url = new URL(req.url);
     const p = url.pathname;
 
-    // Cloud Run's frontend swallows the exact path "/healthz", so the probe lives under /api/health.
-    if (p === "/api/health" || p === "/healthz") return json({ ok: true });
-
+    // (health is router.health, served at /api/health; Cloud Run's frontend swallows "/healthz")
     if (p === "/rpc" || p.startsWith("/rpc/")) {
       const r = await rpc.handle(req, { prefix: "/rpc", context: contextFrom(req) });
       return r.matched ? r.response : json({ error: "not found" }, 404);

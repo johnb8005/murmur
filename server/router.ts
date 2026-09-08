@@ -147,6 +147,20 @@ const postOwnerId = async (id: string) => {
   return res.rows[0] ? str(res.rows[0], "user_id") : null;
 };
 
+// ---------- health ----------
+
+/** Build info injected by the deploy workflow (cloud-run.yml); unset in local dev. */
+const BUILD = {
+  sha: process.env.GIT_SHA || null,
+  version: process.env.GIT_VERSION || null,
+  date: process.env.BUILD_DATE || null,
+};
+
+const health = base
+  .route({ method: "GET", path: "/health", summary: "Liveness + build info" })
+  .output(z.object({ status: z.literal("ok"), sha: z.string().nullable(), version: z.string().nullable(), date: z.string().nullable() }))
+  .handler(() => ({ status: "ok" as const, ...BUILD }));
+
 // ---------- auth ----------
 
 const status = withUser
@@ -359,6 +373,7 @@ const refresh = authed
   });
 
 export const router = {
+  health,
   auth: { status, checkUsername, registerOptions, register, loginOptions, login, logout, addPasskeyOptions, addPasskey, passkeys, removePasskey },
   posts: { list, get, create, delete: remove, like, comment, deleteComment },
   users: { get: getUser },

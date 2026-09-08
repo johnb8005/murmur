@@ -50,7 +50,6 @@ const createTables = () =>
          created_at TEXT NOT NULL
        )`,
       `CREATE INDEX IF NOT EXISTS posts_created ON posts (created_at DESC)`,
-      `CREATE INDEX IF NOT EXISTS posts_user ON posts (user_id, created_at DESC)`,
       `CREATE TABLE IF NOT EXISTS likes (
          post_id    TEXT NOT NULL,
          user_id    TEXT NOT NULL,
@@ -94,6 +93,10 @@ const LATER_COLUMNS: [table: string, column: string][] = [
   ["challenges", "user_id TEXT"],
 ];
 
+// Indexes on columns that were added later must come after the column migrations: on a database
+// from the single-admin version, `posts` exists without `user_id` when createTables runs.
+const LATER_INDEXES = [`CREATE INDEX IF NOT EXISTS posts_user ON posts (user_id, created_at DESC)`];
+
 export const migrate = async () => {
   await createTables();
   for (const [table, col] of LATER_COLUMNS) {
@@ -101,6 +104,7 @@ export const migrate = async () => {
       if (!/duplicate column/i.test(String((e as Error)?.message ?? e))) throw e;
     });
   }
+  for (const sql of LATER_INDEXES) await db.execute(sql);
   // single-admin leftovers: passkeys and sessions without a user can't be used any more
   await db.batch([`DELETE FROM passkeys WHERE user_id IS NULL`, `DELETE FROM sessions WHERE user_id IS NULL`], "write");
 };
