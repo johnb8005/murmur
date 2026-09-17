@@ -1,0 +1,25 @@
+name: Test and build
+on: [push]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: Type-check
+        run: bun run typecheck
+      - name: Build
+        run: bun run build
+      - name: Boot against a local db and hit the API
+        run: |
+          PORT=8080 SITE_URL=http://localhost:8080 bun server/index.ts &
+          sleep 3
+          curl -sSf http://localhost:8080/api/health | grep -q '"status":"ok"'
+          curl -sSf http://localhost:8080/api/auth/status; echo
+          curl -sSf "http://localhost:8080/api/posts" | head -c 200; echo
+          curl -sSf -o /dev/null -w 'manifest -> %{http_code} %{content_type}\n' http://localhost:8080/manifest.webmanifest
+          curl -sSf -o /dev/null -w 'feed.xml -> %{http_code} %{content_type}\n' http://localhost:8080/feed.xml
+          curl -sS -o /dev/null -w 'unauthenticated post -> %{http_code}\n' -X POST -H 'content-type: application/json' -d '{"text":"x"}' http://localhost:8080/api/posts
+          curl -sSf "http://localhost:8080/api/auth/username/johan"; echo

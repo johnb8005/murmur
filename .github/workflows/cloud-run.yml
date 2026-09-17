@@ -1,0 +1,89 @@
+name: Deploy to Cloud Run
+
+# Builds the Dockerfile with Cloud Build and deploys it to Cloud Run.
+#
+# Repository secrets needed:
+#   GCP_SA_KEY          JSON key of a service account with roles: Cloud Run Admin, Cloud Build Editor,
+#                       Artifact Registry Writer, Service Account User (or switch to Workload Identity)
+#   TURSO_DATABASE_URL  libsql://<db>-<org>.turso.io
+#   TURSO_AUTH_TOKEN    turso db tokens create <db>
+#   ADMIN_TOKEN         optional; lets scripts post as the owner
+#   R2_ACCOUNT_ID       Cloudflare account id (the r2.cloudflarestorage.com subdomain)
+#   R2_ACCESS_KEY_ID    R2 token's S3 access key id
+#   R2_SECRET_ACCESS_KEY  R2 token's S3 secret
+# Repository variables: GCP_PROJECT_ID (required); optional GCP_REGION (default europe-west1),
+#   CLOUD_RUN_SERVICE (default murmur), SITE_URL (default https://murmur.johanboissard.me, must be the
+#   address people open the app from: it is the WebAuthn origin), OWNER_USERNAME (default johan),
+#   R2_BUCKET (default perso-blog)
+
+on:
+  push:
+    branches: [master]
+    tags: [v*]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-murmur
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # tags, for the version string
+
+      # /api/health reports these. Version is the tag on tag pushes, otherwise `git describe`
+      # (nearest tag, commits since, short sha), or the short sha when there is no tag at all.
+      - id: build
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then v="${GITHUB_REF_NAME}"; else v=$(git describe --tags --always 2>/dev/null || echo "${GITHUB_SHA::7}"); fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          echo "sha=$GITHUB_SHA version=$v"
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - id: deploy
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ vars.CLOUD_RUN_SERVICE || 'murmur' }}
+          region: ${{ vars.GCP_REGION || 'europe-west1' }}
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          source: .
+          env_vars: |
+            GIT_SHA=${{ github.sha }}
+            GIT_VERSION=${{ steps.build.outputs.version }}
+            BUILD_DATE=${{ steps.build.outputs.date }}
+            SITE_URL=${{ vars.SITE_URL || 'https://murmur.johanboissard.me' }}
+            OWNER_USERNAME=${{ vars.OWNER_USERNAME || 'johan' }}
+            TURSO_DATABASE_URL=${{ secrets.TURSO_DATABASE_URL }}
+            TURSO_AUTH_TOKEN=${{ secrets.TURSO_AUTH_TOKEN }}
+            ADMIN_TOKEN=${{ secrets.ADMIN_TOKEN }}
+            R2_ACCOUNT_ID=${{ secrets.R2_ACCOUNT_ID }}
+            R2_ACCESS_KEY_ID=${{ secrets.R2_ACCESS_KEY_ID }}
+            R2_SECRET_ACCESS_KEY=${{ secrets.R2_SECRET_ACCESS_KEY }}
+            R2_BUCKET=${{ vars.R2_BUCKET || 'perso-blog' }}
+          flags: >-
+            --allow-unauthenticated
+            --memory=2Gi
+            --cpu=1
+            --timeout=300
+            --concurrency=20
+            --min-instances=0
+            --max-instances=2
+
+      - name: Smoke test
+        run: |
+          url="${{ steps.deploy.outputs.url }}"
+          echo "deployed: $url"
+          curl -sSf "$url/api/health"; echo
+          curl -sSf "$url/api/health" | grep -q "\"sha\":\"${{ github.sha }}\"" || { echo "health does not report the deployed sha"; exit 1; }
+          curl -sSf -o /dev/null -w 'manifest -> %{http_code} %{content_type}\n' "$url/manifest.webmanifest"
+          curl -sSf -o /dev/null -w 'feed.xml -> %{http_code} %{content_type}\n' "$url/feed.xml"

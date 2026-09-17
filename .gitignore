@@ -1,0 +1,10 @@
+node_modules/
+dist/
+
+.DS_Store
+.env
+.env.*.local
+
+# local dev database
+local.db
+local.db-journal

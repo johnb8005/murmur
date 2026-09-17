@@ -1,0 +1,10 @@
+node_modules
+dist
+.git
+.github
+*.db
+*.db-journal
+.env*
+README.md
+LICENSE
+CLAUDE.md
