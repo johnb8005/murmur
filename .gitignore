@@ -8,3 +8,4 @@ dist/
 # local dev database
 local.db
 local.db-journal
+test/e2e.db*

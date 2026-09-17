@@ -1,18 +1,21 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { startRegistration } from "@simplewebauthn/browser";
 import { api, deviceName, errText } from "../api";
 import { useAuth } from "../auth";
 import { Icon } from "../icons";
 import { APP_NAME } from "../../shared/links";
+import { DeviceLinkCard } from "./link";
 
 type Passkey = { id: string; name: string | null; createdAt: string; lastUsedAt: string | null };
+type Feed = { token: string; rss: string; json: string };
 
 const Settings = () => {
   document.title = `Settings · ${APP_NAME}`;
   const { me, refresh, signOut } = useAuth();
-  const navigate = useNavigate();
   const [passkeys, setPasskeys] = useState<Passkey[]>([]);
+  const [feed, setFeed] = useState<Feed | null>(null);
+  const [linking, setLinking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -24,13 +27,13 @@ const Settings = () => {
   const load = useCallback(() => api.auth.passkeys().then(setPasskeys).catch((e) => setMsg({ ok: false, text: errText(e) })), []);
 
   useEffect(() => {
-    if (me === null) navigate("/login?next=/settings", { replace: true });
     if (me) {
       load();
+      api.auth.feed().then(setFeed).catch(() => setFeed(null));
       setUsername(me.username);
       setDisplayName(me.displayName);
     }
-  }, [me, navigate, load]);
+  }, [me, load]);
 
   // live availability check while typing a new username
   const usernameChanged = !!me && username.trim().toLowerCase() !== me.username;
@@ -83,6 +86,11 @@ const Settings = () => {
       await api.auth.removePasskey({ id });
       await load();
     });
+
+  const copy = (text: string, what: string) => run(async () => {
+    await navigator.clipboard.writeText(text);
+    return `${what} copied.`;
+  });
 
   if (!me) return null;
 
@@ -143,13 +151,41 @@ const Settings = () => {
             </button>
           </div>
         ))}
-        <div className="flex gap-5 pt-1">
+        <div className="flex flex-wrap gap-5 pt-1">
           <button onClick={add} disabled={busy} className="btn-quiet">
             <Icon name="plus" size={14} />
             Add this device
           </button>
+          <button onClick={() => setLinking((v) => !v)} disabled={busy} className="btn-quiet">
+            <Icon name="qr" size={14} />
+            Add another device
+          </button>
         </div>
-        <p className="font-mono text-xs text-gray-600">Add a passkey on each device you use, or sync them through iCloud Keychain / Google Password Manager.</p>
+        {linking && <DeviceLinkCard onDone={() => { setLinking(false); load(); }} />}
+        <p className="font-mono text-xs text-gray-600">
+          One account, many devices: each one you use gets its own passkey. "Add another device" shows a link and a QR code to open on the
+          new phone or laptop; it registers a passkey there and signs it in. Passkeys synced by iCloud Keychain or Google Password Manager
+          need no extra step.
+        </p>
+      </section>
+
+      <section className="glass rounded-3xl px-6 py-5 space-y-3">
+        <h2 className="font-mono text-xs uppercase tracking-widest text-gray-500">Feeds</h2>
+        <p className="font-mono text-xs text-gray-600">
+          The timeline is for members only, so your feed URLs carry a secret token. Paste one into your reader; keep it to yourself.
+        </p>
+        {feed && (
+          <div className="flex flex-wrap gap-5">
+            <button onClick={() => copy(feed.rss, "RSS URL")} disabled={busy} className="btn-quiet">
+              <Icon name="rss" size={14} />
+              Copy RSS URL
+            </button>
+            <button onClick={() => copy(feed.json, "JSON Feed URL")} disabled={busy} className="btn-quiet">
+              <Icon name="copy" size={14} />
+              Copy JSON Feed URL
+            </button>
+          </div>
+        )}
       </section>
 
       <section className="glass rounded-3xl px-6 py-5 space-y-3">

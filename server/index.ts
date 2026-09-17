@@ -1,5 +1,6 @@
-// Bun server: the built app (dist/), feeds, preview images, the oRPC API, and server-rendered
-// Open Graph tags on post and profile URLs so WhatsApp, Slack and friends show a card.
+// Bun server: the built app (dist/), feeds, preview images and the oRPC API. The network is
+// private: feeds and preview images need a session cookie or a feed token (?token=), and pages
+// carry only generic Open Graph tags so a shared post URL reveals nothing to link unfurlers.
 
 import path from "node:path";
 import { ORPCError } from "@orpc/server";
@@ -9,14 +10,23 @@ import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { db, migrate } from "./db";
 import { router, loadPosts, type Context } from "./router";
 import { screenshotByHash, closeBrowser } from "./preview";
-import { readCookie, pruneAuth, adoptLegacyPosts, userByUsername, SESSION_COOKIE } from "./auth";
-import { toRss, toJsonFeed, escapeHtml, itemTitle, APP_NAME, type FeedOptions } from "../shared/links";
+import { readCookie, pruneAuth, adoptLegacyPosts, sessionUser, userByFeedToken, SESSION_COOKIE } from "./auth";
+import { toRss, toJsonFeed, escapeHtml, APP_NAME, type Author, type FeedOptions } from "../shared/links";
 
 const PORT = Number(process.env.PORT) || 8080;
 const DIST = path.resolve(import.meta.dir, "..", "dist");
 const SITE_URL = (process.env.SITE_URL || "https://murmur.johanboissard.me").replace(/\/$/, "");
 const DESCRIPTION = "Links worth sharing, from people worth following. No algorithm.";
 const feedOptions: FeedOptions = { siteUrl: SITE_URL, title: APP_NAME, description: DESCRIPTION };
+
+/** Who is asking for a feed or preview image: the session cookie, or a feed token in the URL. */
+const viewer = async (req: Request, url: URL): Promise<{ user: Author; token: string | null } | null> => {
+  const user = await sessionUser(readCookie(req, SESSION_COOKIE));
+  if (user) return { user, token: null };
+  const token = url.searchParams.get("token");
+  const byToken = await userByFeedToken(token);
+  return byToken ? { user: byToken, token } : null;
+};
 
 // ResponseHeadersPlugin hands procedures a `resHeaders` Headers object (used for set-cookie).
 // onError: oRPC turns unexpected exceptions into a bare 500; log them so Cloud Run shows the cause.
@@ -43,57 +53,28 @@ const json = (body: unknown, status = 200) =>
 
 // ---------- html with Open Graph tags ----------
 
-interface Meta {
-  title: string;
-  description: string;
-  url: string;
-  image?: string | null;
-  type?: string;
-}
-
-const absolute = (src: string) => (src.startsWith("/") ? SITE_URL + src : src);
-
-/** The built index.html, with the `<!-- og -->` placeholder swapped for page-specific tags. */
-const html = async (meta: Meta): Promise<Response> => {
+/**
+ * The built index.html, with the `<!-- og -->` placeholder swapped for the app's generic tags.
+ * Every page gets the same ones on purpose: posts and profiles are only for signed-in members,
+ * so a post URL pasted in a chat must not unfurl into its content.
+ */
+const html = async (pathname: string): Promise<Response> => {
   const index = Bun.file(path.join(DIST, "index.html"));
   if (!(await index.exists())) return new Response("dist/ not built. Run `bun run build`.", { status: 503 });
-  const image = meta.image ? absolute(meta.image) : `${SITE_URL}/icon-512.png`;
+  const url = SITE_URL + pathname;
   const tags = [
     `<meta property="og:site_name" content="${APP_NAME}">`,
-    `<meta property="og:type" content="${meta.type || "website"}">`,
-    `<meta property="og:title" content="${escapeHtml(meta.title)}">`,
-    `<meta property="og:description" content="${escapeHtml(meta.description)}">`,
-    `<meta property="og:url" content="${escapeHtml(meta.url)}">`,
-    `<meta property="og:image" content="${escapeHtml(image)}">`,
-    `<meta name="twitter:card" content="${meta.image ? "summary_large_image" : "summary"}">`,
-    `<meta name="description" content="${escapeHtml(meta.description)}">`,
-    `<link rel="canonical" href="${escapeHtml(meta.url)}">`,
+    `<meta property="og:type" content="website">`,
+    `<meta property="og:title" content="${APP_NAME}">`,
+    `<meta property="og:description" content="${escapeHtml(DESCRIPTION)}">`,
+    `<meta property="og:url" content="${escapeHtml(url)}">`,
+    `<meta property="og:image" content="${SITE_URL}/icon-512.png">`,
+    `<meta name="twitter:card" content="summary">`,
+    `<meta name="description" content="${escapeHtml(DESCRIPTION)}">`,
+    `<meta name="robots" content="noindex">`,
   ].join("\n    ");
-  const body = (await index.text())
-    .replace(/<title>[^<]*<\/title>/, `<title>${escapeHtml(meta.title)}</title>`)
-    .replace("<!-- og -->", tags);
+  const body = (await index.text()).replace("<!-- og -->", tags);
   return new Response(body, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" } });
-};
-
-const defaultMeta = (p: string): Meta => ({ title: APP_NAME, description: DESCRIPTION, url: SITE_URL + p });
-
-const postMeta = async (id: string): Promise<Meta> => {
-  const [post] = await loadPosts({ id, limit: 1 });
-  if (!post) return defaultMeta(`/p/${id}`);
-  const text = post.text.length > 200 ? post.text.slice(0, 197).trimEnd() + "…" : post.text;
-  return {
-    title: `${post.author.displayName} (@${post.author.username}) on ${APP_NAME}: ${itemTitle(post)}`,
-    description: text || post.preview?.description || DESCRIPTION,
-    url: `${SITE_URL}/p/${post.id}`,
-    image: post.preview?.image,
-    type: "article",
-  };
-};
-
-const userMeta = async (username: string): Promise<Meta> => {
-  const user = await userByUsername(username);
-  if (!user) return defaultMeta(`/u/${username}`);
-  return { title: `${user.displayName} (@${user.username}) on ${APP_NAME}`, description: DESCRIPTION, url: `${SITE_URL}/u/${user.username}`, type: "profile" };
 };
 
 // ---------- static ----------
@@ -132,22 +113,26 @@ const server = Bun.serve({
       return r.matched ? r.response : json({ error: "not found" }, 404);
     }
     if (p === "/feed.xml" || p === "/feed.json") {
-      const posts = await loadPosts({ limit: 100 });
+      const who = await viewer(req, url);
+      if (!who) return new Response("sign in, or use the feed URL from Settings", { status: 401, headers: { "cache-control": "no-store" } });
+      const posts = await loadPosts({ viewerId: who.user.id, limit: 100 });
       const xml = p === "/feed.xml";
-      return new Response(xml ? toRss(posts, feedOptions) : toJsonFeed(posts, feedOptions), {
+      const opts = who.token ? { ...feedOptions, token: who.token } : feedOptions;
+      return new Response(xml ? toRss(posts, opts) : toJsonFeed(posts, opts), {
         headers: {
           "content-type": xml ? "application/rss+xml; charset=utf-8" : "application/feed+json; charset=utf-8",
-          "cache-control": "public, max-age=300",
+          "cache-control": "private, max-age=300",
         },
       });
     }
 
     const shot = /^\/previews\/([0-9a-f]{12})\.jpg$/.exec(p);
     if (shot) {
+      if (!(await viewer(req, url))) return new Response("unauthorized", { status: 401, headers: { "cache-control": "no-store" } });
       const img = await screenshotByHash(shot[1]);
       if (!img) return new Response("not found", { status: 404 });
       return new Response(img.bytes.buffer as ArrayBuffer, {
-        headers: { "content-type": img.type, "cache-control": "public, max-age=86400" },
+        headers: { "content-type": img.type, "cache-control": "private, max-age=86400" },
       });
     }
 
@@ -156,12 +141,8 @@ const server = Bun.serve({
         const f = await staticFile(p);
         if (f) return f;
       }
-      // app routes: index.html with Open Graph tags for the page
-      const post = /^\/p\/([a-z0-9]+)$/i.exec(p);
-      if (post) return html(await postMeta(post[1]));
-      const user = /^\/u\/([a-z0-9_]+)$/i.exec(p);
-      if (user) return html(await userMeta(user[1]));
-      return html(defaultMeta(p));
+      // app routes (/, /p/<id>, /u/<name>, /link/<token>, ...): the shell, the app takes it from there
+      return html(p);
     }
     return new Response("method not allowed", { status: 405 });
   },

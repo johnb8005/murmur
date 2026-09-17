@@ -9,6 +9,8 @@ interface AuthState {
   refresh: () => Promise<void>;
   signIn: (username?: string) => Promise<Author>;
   register: (username: string) => Promise<Author>;
+  /** Device link from Settings on another device: registers a passkey here and signs in. */
+  linkDevice: (token: string) => Promise<Author>;
   signOut: () => Promise<void>;
 }
 
@@ -45,12 +47,20 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     return user;
   };
 
+  const linkDevice = async (token: string) => {
+    const { challengeId, options } = await api.auth.linkOptions({ token });
+    const response = await startRegistration({ optionsJSON: options });
+    const { user } = await api.auth.linkFinish({ challengeId, response, deviceName: deviceName() });
+    setMe(user);
+    return user;
+  };
+
   const signOut = async () => {
     await api.auth.logout();
     setMe(null);
   };
 
-  return <Ctx.Provider value={{ me, refresh, signIn, register, signOut }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ me, refresh, signIn, register, linkDevice, signOut }}>{children}</Ctx.Provider>;
 };
 
 export const useAuth = () => useContext(Ctx);
