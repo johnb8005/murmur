@@ -18,7 +18,7 @@ name: Deploy to Cloud Run
 
 on:
   push:
-    branches: [master]
+    branches: [main]
     tags: [v*]
   workflow_dispatch:
 
@@ -86,4 +86,4 @@ jobs:
           curl -sSf "$url/api/health"; echo
           curl -sSf "$url/api/health" | grep -q "\"sha\":\"${{ github.sha }}\"" || { echo "health does not report the deployed sha"; exit 1; }
           curl -sSf -o /dev/null -w 'manifest -> %{http_code} %{content_type}\n' "$url/manifest.webmanifest"
-          curl -sSf -o /dev/null -w 'feed.xml -> %{http_code} %{content_type}\n' "$url/feed.xml"
+          [ "$(curl -sS -o /dev/null -w '%{http_code}' "$url/feed.xml")" = 401 ] && echo "feed.xml -> 401 without a token, as it should"

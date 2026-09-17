@@ -1,8 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import { api, errText } from "../api";
 import { useAuth } from "../auth";
-import { Icon } from "../icons";
 import { APP_NAME, type Post } from "../../shared/links";
 import Compose from "./compose";
 import { PostCard } from "./post";
@@ -65,15 +64,6 @@ const Timeline = () => {
   return (
     <div className="space-y-5">
       {me && <Compose autoFocus={params.get("compose") === "1"} onPosted={prepend} />}
-      {me === null && (
-        <div className="glass rounded-3xl px-6 py-6 text-center space-y-3">
-          <p className="text-gray-300">Links worth sharing, from people worth following. No algorithm.</p>
-          <Link to="/login" className="btn">
-            <Icon name="fingerprint" size={14} />
-            Sign in or create an account
-          </Link>
-        </div>
-      )}
 
       {error && <p className="font-mono text-sm text-red-300/80">{error}</p>}
       {posts === null && !error && <p className="font-mono text-sm text-gray-600">Loading…</p>}

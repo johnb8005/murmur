@@ -18,8 +18,14 @@ jobs:
           sleep 3
           curl -sSf http://localhost:8080/api/health | grep -q '"status":"ok"'
           curl -sSf http://localhost:8080/api/auth/status; echo
-          curl -sSf "http://localhost:8080/api/posts" | head -c 200; echo
           curl -sSf -o /dev/null -w 'manifest -> %{http_code} %{content_type}\n' http://localhost:8080/manifest.webmanifest
-          curl -sSf -o /dev/null -w 'feed.xml -> %{http_code} %{content_type}\n' http://localhost:8080/feed.xml
-          curl -sS -o /dev/null -w 'unauthenticated post -> %{http_code}\n' -X POST -H 'content-type: application/json' -d '{"text":"x"}' http://localhost:8080/api/posts
+          # members only: the timeline, feeds and previews answer 401 without a session or feed token
+          [ "$(curl -sS -o /dev/null -w '%{http_code}' http://localhost:8080/api/posts)" = 401 ]
+          [ "$(curl -sS -o /dev/null -w '%{http_code}' http://localhost:8080/feed.xml)" = 401 ]
+          [ "$(curl -sS -o /dev/null -w '%{http_code}' "http://localhost:8080/feed.json?token=nope")" = 401 ]
+          [ "$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' -d '{"text":"x"}' http://localhost:8080/api/posts)" = 401 ]
+          # a shared post URL unfurls to the generic card only
+          curl -sSf http://localhost:8080/p/abc123 | grep -q 'og:title" content="Murmur"'
           curl -sSf "http://localhost:8080/api/auth/username/johan"; echo
+      - name: Passkey flows in a browser (sign-up, device link, feed token)
+        run: bunx playwright install --with-deps chromium && bun test/e2e.ts

@@ -91,6 +91,8 @@ const LATER_COLUMNS: [table: string, column: string][] = [
   ["challenges", "kind TEXT NOT NULL DEFAULT 'login'"],
   ["challenges", "username TEXT"],
   ["challenges", "user_id TEXT"],
+  ["challenges", "link TEXT"],
+  ["users", "feed_token TEXT"],
 ];
 
 // Indexes on columns that were added later must come after the column migrations: on a database

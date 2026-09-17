@@ -1,6 +1,8 @@
 // Accounts: a unique username plus one or more passkeys (WebAuthn). No passwords, no email.
 // Challenges and sessions live in the database so any Cloud Run instance can finish what another
 // started. Passkeys are registered as discoverable, so sign-in needs no username (but accepts one).
+// A signed-in device can mint a short-lived device link: opened on another device, it registers a
+// passkey there for the same account and signs it in. Feed tokens let RSS readers in.
 
 import crypto from "node:crypto";
 import {
@@ -22,11 +24,12 @@ export const expectedOrigin = site.origin;
 export const OWNER_USERNAME = (process.env.OWNER_USERNAME || "johan").toLowerCase();
 
 const CHALLENGE_TTL_MS = 5 * 60_000;
+const DEVICE_LINK_TTL_MS = 10 * 60_000;
 const SESSION_TTL_MS = 90 * 24 * 3600_000;
 export const SESSION_COOKIE = "session";
 
 export const USERNAME_RE = /^[a-z0-9_]{3,20}$/;
-const RESERVED = new Set(["admin", "root", "me", "login", "logout", "register", "settings", "share", "api", "rpc", "p", "u", "feed", "previews", "murmur", "system", "null", "undefined"]);
+const RESERVED = new Set(["admin", "root", "me", "login", "logout", "register", "settings", "share", "link", "api", "rpc", "p", "u", "feed", "previews", "murmur", "system", "null", "undefined"]);
 
 export const newId = () => crypto.randomUUID().replace(/-/g, "").slice(0, 12);
 const rand = () => crypto.randomBytes(24).toString("base64url");
@@ -107,30 +110,38 @@ export const adoptLegacyPosts = async () => {
 
 // ---------- challenges ----------
 
-type ChallengeKind = "register" | "add" | "login";
+// "device-link" rows are not WebAuthn challenges but device links (see below); "link-add" is the
+// registration challenge a device link turns into, and remembers the link it came from.
+type ChallengeKind = "register" | "add" | "login" | "device-link" | "link-add";
 
-const storeChallenge = async (challenge: string, kind: ChallengeKind, extra: { username?: string; userId?: string } = {}) => {
+const storeChallenge = async (challenge: string, kind: ChallengeKind, extra: { username?: string; userId?: string; link?: string; ttl?: number } = {}) => {
   const id = rand();
   await db.execute({
-    sql: `INSERT INTO challenges (id, challenge, kind, username, user_id, expires_at) VALUES (?, ?, ?, ?, ?, ?)`,
-    args: [id, challenge, kind, extra.username ?? null, extra.userId ?? null, after(CHALLENGE_TTL_MS)],
+    sql: `INSERT INTO challenges (id, challenge, kind, username, user_id, link, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    args: [id, challenge, kind, extra.username ?? null, extra.userId ?? null, extra.link ?? null, after(extra.ttl ?? CHALLENGE_TTL_MS)],
   });
   return id;
 };
 
+const readChallenge = async (id: string, kind: ChallengeKind) => {
+  const res = await db.execute({ sql: `SELECT challenge, kind, username, user_id, link, expires_at FROM challenges WHERE id = ?`, args: [id] });
+  const row = res.rows[0];
+  if (!row || str(row, "expires_at")! < now() || str(row, "kind") !== kind) return null;
+  return { challenge: str(row, "challenge")!, username: str(row, "username"), userId: str(row, "user_id"), link: str(row, "link"), expiresAt: str(row, "expires_at")! };
+};
+
 /** One-shot: returns the challenge row and deletes it; throws if unknown, expired or the wrong kind. */
 const takeChallenge = async (id: string, kind: ChallengeKind) => {
-  const res = await db.execute({ sql: `SELECT challenge, kind, username, user_id, expires_at FROM challenges WHERE id = ?`, args: [id] });
+  const row = await readChallenge(id, kind);
   await db.execute({ sql: `DELETE FROM challenges WHERE id = ? OR expires_at < ?`, args: [id, now()] });
-  const row = res.rows[0];
-  if (!row || str(row, "expires_at")! < now() || str(row, "kind") !== kind) throw new AuthError("challenge expired, try again");
-  return { challenge: str(row, "challenge")!, username: str(row, "username"), userId: str(row, "user_id") };
+  if (!row) throw new AuthError("challenge expired, try again");
+  return row;
 };
 
 // ---------- registration (new account) and adding passkeys ----------
 
-const registrationOptionsFor = async (userId: string, username: string, kind: "register" | "add") => {
-  const existing = kind === "add" ? await db.execute({ sql: `SELECT id, transports FROM passkeys WHERE user_id = ?`, args: [userId] }) : { rows: [] };
+const registrationOptionsFor = async (userId: string, username: string, kind: "register" | "add" | "link-add", link?: string) => {
+  const existing = kind === "register" ? { rows: [] } : await db.execute({ sql: `SELECT id, transports FROM passkeys WHERE user_id = ?`, args: [userId] });
   const options = await generateRegistrationOptions({
     rpName: APP_NAME,
     rpID,
@@ -142,7 +153,7 @@ const registrationOptionsFor = async (userId: string, username: string, kind: "r
     // discoverable, so sign-in works without typing the username
     authenticatorSelection: { residentKey: "required", userVerification: "preferred" },
   });
-  return { challengeId: await storeChallenge(options.challenge, kind, { username, userId }), options };
+  return { challengeId: await storeChallenge(options.challenge, kind, { username, userId, link }), options };
 };
 
 export const registrationOptions = async (rawUsername: string) => {
@@ -178,17 +189,64 @@ export const register = async (challengeId: string, response: RegistrationRespon
 
 export const addPasskeyOptions = (user: Author) => registrationOptionsFor(user.id, user.username, "add");
 
-export const addPasskey = async (user: Author, challengeId: string, response: RegistrationResponseJSON, deviceName: string | null) => {
-  const ch = await takeChallenge(challengeId, "add");
-  if (ch.userId !== user.id) throw new AuthError("challenge does not belong to you");
-  const v = await verifyRegistrationResponse({ response, expectedChallenge: ch.challenge, expectedOrigin, expectedRPID: rpID });
+/** Verify a registration response against its challenge and store the passkey for `userId`. */
+const storeVerifiedPasskey = async (userId: string, challenge: string, response: RegistrationResponseJSON, deviceName: string | null) => {
+  const v = await verifyRegistrationResponse({ response, expectedChallenge: challenge, expectedOrigin, expectedRPID: rpID });
   if (!v.verified) throw new AuthError("registration could not be verified");
   const c = v.registrationInfo.credential;
   await db.execute({
     sql: `INSERT INTO passkeys (id, user_id, public_key, counter, transports, name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    args: [c.id, user.id, c.publicKey, c.counter, JSON.stringify(c.transports || []), deviceName, now()],
+    args: [c.id, userId, c.publicKey, c.counter, JSON.stringify(c.transports || []), deviceName, now()],
   });
   return c.id;
+};
+
+export const addPasskey = async (user: Author, challengeId: string, response: RegistrationResponseJSON, deviceName: string | null) => {
+  const ch = await takeChallenge(challengeId, "add");
+  if (ch.userId !== user.id) throw new AuthError("challenge does not belong to you");
+  return storeVerifiedPasskey(user.id, ch.challenge, response, deviceName);
+};
+
+// ---------- device links: add a new device to an account without any passkey on it ----------
+//
+// 1. A signed-in device calls createDeviceLink: a random, single-use token valid for ten minutes,
+//    shown as a URL / QR code.
+// 2. The new device opens /link/<token>: deviceLinkInfo shows whose account it is,
+//    deviceLinkOptions starts a passkey registration for that account (the link stays valid, so a
+//    cancelled prompt can be retried).
+// 3. finishDeviceLink verifies the passkey, stores it, consumes the link and signs the device in.
+
+export interface DeviceLink {
+  token: string;
+  expiresAt: string;
+}
+
+export const createDeviceLink = async (user: Author): Promise<DeviceLink> => {
+  const token = await storeChallenge("", "device-link", { userId: user.id, username: user.username, ttl: DEVICE_LINK_TTL_MS });
+  return { token, expiresAt: after(DEVICE_LINK_TTL_MS) };
+};
+
+const deviceLink = async (token: string) => {
+  const row = await readChallenge(token, "device-link");
+  const user = row?.userId ? await userById(row.userId) : null;
+  if (!row || !user) throw new AuthError("this link has expired or was already used; make a new one in Settings");
+  return { user, expiresAt: row.expiresAt };
+};
+
+export const deviceLinkInfo = async (token: string): Promise<{ user: Author; expiresAt: string }> => deviceLink(token);
+
+export const deviceLinkOptions = async (token: string) => {
+  const { user } = await deviceLink(token);
+  return registrationOptionsFor(user.id, user.username, "link-add", token);
+};
+
+export const finishDeviceLink = async (challengeId: string, response: RegistrationResponseJSON, deviceName: string | null): Promise<Author> => {
+  const ch = await takeChallenge(challengeId, "link-add");
+  if (!ch.link) throw new AuthError("challenge expired, try again");
+  const { user } = await deviceLink(ch.link); // still valid: not consumed by another device meanwhile
+  await storeVerifiedPasskey(user.id, ch.challenge, response, deviceName);
+  await db.execute({ sql: `DELETE FROM challenges WHERE id = ?`, args: [ch.link] });
+  return user;
 };
 
 // ---------- sign-in ----------
@@ -250,6 +308,27 @@ export const removePasskey = async (userId: string, id: string) => {
   if (Number(count.rows[0]?.["n"] ?? 0) <= 1) throw new AuthError("you need at least one passkey to sign in");
   const res = await db.execute({ sql: `DELETE FROM passkeys WHERE id = ? AND user_id = ?`, args: [id, userId] });
   return res.rowsAffected > 0;
+};
+
+// ---------- feed tokens ----------
+//
+// Feeds and preview images need an account but RSS readers cannot sign in, so each user gets a
+// secret token to put in the feed URL. Created on first use.
+
+export const feedToken = async (userId: string): Promise<string> => {
+  const res = await db.execute({ sql: `SELECT feed_token FROM users WHERE id = ?`, args: [userId] });
+  const existing = res.rows[0] ? str(res.rows[0], "feed_token") : null;
+  if (existing) return existing;
+  const token = rand();
+  await db.execute({ sql: `UPDATE users SET feed_token = ? WHERE id = ? AND feed_token IS NULL`, args: [token, userId] });
+  return feedToken(userId); // whichever write won
+};
+
+export const userByFeedToken = async (token: string | null | undefined): Promise<Author | null> => {
+  if (!token) return null;
+  const res = await db.execute({ sql: `SELECT id, username, display_name FROM users WHERE feed_token = ?`, args: [token] });
+  const r = res.rows[0];
+  return r ? toAuthor({ id: str(r, "id")!, username: str(r, "username")!, display_name: str(r, "display_name")! }) : null;
 };
 
 // ---------- sessions ----------

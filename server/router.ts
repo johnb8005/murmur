@@ -1,6 +1,8 @@
 // oRPC router: the whole API. Served at /rpc (oRPC protocol, used by the app) and /api (plain
 // HTTP/OpenAPI, handy for curl). Signed-in calls carry the session cookie; scripts may instead
 // send `Authorization: Bearer $ADMIN_TOKEN`, which acts as the owner account.
+// The network is private: everything but health and the sign-in / sign-up / device-link
+// procedures needs a signed-in user.
 
 import { os, ORPCError } from "@orpc/server";
 import * as z from "zod";
@@ -259,20 +261,58 @@ const removePasskey = authed
   .output(z.object({ deleted: z.boolean() }))
   .handler(({ input, context }) => guard(async () => ({ deleted: await auth.removePasskey(context.user.id, input.id) })));
 
+// device links: add a device that has no passkey yet (see server/auth.ts)
+
+const linkCreate = authed
+  .route({ method: "POST", path: "/auth/link", summary: "Make a short-lived link that adds another device to my account" })
+  .output(z.object({ token: z.string(), expiresAt: z.string() }))
+  .handler(({ context }) => auth.createDeviceLink(context.user));
+
+const linkInfo = base
+  .route({ method: "GET", path: "/auth/link/{token}", summary: "Whose account a device link adds to" })
+  .input(z.object({ token: z.string().max(100) }))
+  .output(z.object({ user: AuthorSchema, expiresAt: z.string() }))
+  .handler(({ input }) => guard(() => auth.deviceLinkInfo(input.token)));
+
+const linkOptions = base
+  .route({ method: "POST", path: "/auth/link/{token}/options", summary: "Start registering this device's passkey through a device link" })
+  .input(z.object({ token: z.string().max(100) }))
+  .output(z.object({ challengeId: z.string(), options: WebAuthnJson }))
+  .handler(({ input }) => guard(() => auth.deviceLinkOptions(input.token)));
+
+const linkFinish = base
+  .route({ method: "POST", path: "/auth/link/finish", summary: "Finish a device link: stores the passkey and signs this device in" })
+  .input(z.object({ challengeId: z.string(), response: WebAuthnJson, deviceName: z.string().max(100).nullish() }))
+  .output(z.object({ user: AuthorSchema }))
+  .handler(async ({ input, context }) => {
+    const user = await guard(() => auth.finishDeviceLink(input.challengeId, input.response as RegistrationResponseJSON, input.deviceName ?? null));
+    await startSession(context, user);
+    return { user };
+  });
+
+const feed = authed
+  .route({ method: "GET", path: "/auth/feed", summary: "My private feed URLs (the token in them is a secret)" })
+  .output(z.object({ token: z.string(), rss: z.string(), json: z.string() }))
+  .handler(async ({ context }) => {
+    const token = await auth.feedToken(context.user.id);
+    const q = `?token=${encodeURIComponent(token)}`;
+    return { token, rss: `${auth.expectedOrigin}/feed.xml${q}`, json: `${auth.expectedOrigin}/feed.json${q}` };
+  });
+
 // ---------- posts ----------
 
-const list = withUser
+const list = authed
   .route({ method: "GET", path: "/posts", summary: "Timeline, newest first" })
   .input(z.object({ limit: z.coerce.number().int().min(1).max(100).default(30), before: z.string().optional() }).optional())
   .output(z.array(PostSchema))
-  .handler(({ input, context }) => loadPosts({ viewerId: context.user?.id, limit: input?.limit ?? 30, before: input?.before }));
+  .handler(({ input, context }) => loadPosts({ viewerId: context.user.id, limit: input?.limit ?? 30, before: input?.before }));
 
-const get = withUser
+const get = authed
   .route({ method: "GET", path: "/posts/{id}", summary: "One post with its comments" })
   .input(z.object({ id: z.string() }))
   .output(z.object({ post: PostSchema, comments: z.array(CommentSchema) }))
   .handler(async ({ input, context }) => {
-    const [post] = await loadPosts({ viewerId: context.user?.id, id: input.id, limit: 1 });
+    const [post] = await loadPosts({ viewerId: context.user.id, id: input.id, limit: 1 });
     if (!post) throw new ORPCError("NOT_FOUND", { message: "no such post" });
     return { post, comments: await loadComments(post.id) };
   });
@@ -356,14 +396,14 @@ const deleteComment = authed
 
 // ---------- users ----------
 
-const getUser = withUser
+const getUser = authed
   .route({ method: "GET", path: "/users/{username}", summary: "A user and their posts" })
   .input(z.object({ username: Username, before: z.string().optional() }))
   .output(z.object({ user: AuthorSchema, posts: z.array(PostSchema) }))
   .handler(async ({ input, context }) => {
     const user = await auth.userByUsername(input.username);
     if (!user) throw new ORPCError("NOT_FOUND", { message: "no such user" });
-    return { user, posts: await loadPosts({ viewerId: context.user?.id, authorId: user.id, before: input.before, limit: 50 }) };
+    return { user, posts: await loadPosts({ viewerId: context.user.id, authorId: user.id, before: input.before, limit: 50 }) };
   });
 
 // ---------- previews ----------
@@ -382,7 +422,25 @@ const refresh = authed
 
 export const router = {
   health,
-  auth: { status, checkUsername, registerOptions, register, loginOptions, login, logout, updateProfile, addPasskeyOptions, addPasskey, passkeys, removePasskey },
+  auth: {
+    status,
+    checkUsername,
+    registerOptions,
+    register,
+    loginOptions,
+    login,
+    logout,
+    updateProfile,
+    addPasskeyOptions,
+    addPasskey,
+    passkeys,
+    removePasskey,
+    linkCreate,
+    linkInfo,
+    linkOptions,
+    linkFinish,
+    feed,
+  },
   posts: { list, get, create, delete: remove, like, comment, deleteComment },
   users: { get: getUser },
   previews: { refresh },

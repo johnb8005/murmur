@@ -1,6 +1,5 @@
 import React from "react";
-import { Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import { useAuth } from "../auth";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { APP_NAME } from "../../shared/links";
 import Compose from "./compose";
 
@@ -22,13 +21,8 @@ const draftFrom = (params: URLSearchParams) => {
 
 const SharePage = () => {
   document.title = `Share · ${APP_NAME}`;
-  const { me } = useAuth();
   const [params] = useSearchParams();
-  const location = useLocation();
   const navigate = useNavigate();
-
-  if (me === undefined) return <p className="font-mono text-sm text-gray-600">Loading…</p>;
-  if (me === null) return <Navigate to={`/login?next=${encodeURIComponent(location.pathname + location.search)}`} replace />;
 
   return (
     <div className="space-y-4">

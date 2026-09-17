@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Link, NavLink } from "react-router-dom";
+import { api } from "../api";
 import { useAuth } from "../auth";
 import { Icon } from "../icons";
 import { APP_NAME } from "../../shared/links";
@@ -23,9 +24,20 @@ const useInstallPrompt = () => {
   return prompt;
 };
 
+/** The signed-in user's private feed URLs (they carry a secret token, see Settings). */
+const useFeeds = (userId: string | undefined) => {
+  const [feeds, setFeeds] = useState<{ rss: string; json: string } | null>(null);
+  useEffect(() => {
+    if (!userId) return setFeeds(null);
+    api.auth.feed().then(setFeeds).catch(() => setFeeds(null));
+  }, [userId]);
+  return feeds;
+};
+
 const Layout = ({ children }: { children: React.ReactNode }) => {
   const { me } = useAuth();
   const install = useInstallPrompt();
+  const feeds = useFeeds(me?.id);
 
   return (
     <>
@@ -43,9 +55,11 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
                 <span className="hidden sm:inline">Install</span>
               </button>
             )}
-            <a href="/feed.xml" className="hover:text-orange-300 transition-colors" title="RSS">
-              <Icon name="rss" size={18} />
-            </a>
+            {feeds && (
+              <a href={feeds.rss} className="hover:text-orange-300 transition-colors" title="Your private RSS feed">
+                <Icon name="rss" size={18} />
+              </a>
+            )}
             {me === null && (
               <NavLink to="/login" className="btn-quiet">
                 <Icon name="fingerprint" size={16} />
@@ -67,7 +81,13 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
         </header>
         <main>{children}</main>
         <footer className="mt-16 text-center text-gray-600 text-xs font-mono">
-          {APP_NAME} · <a href="/feed.xml" className="hover:text-gray-400">RSS</a> · <a href="/feed.json" className="hover:text-gray-400">JSON Feed</a>
+          {APP_NAME}
+          {feeds && (
+            <>
+              {" · "}
+              <a href={feeds.rss} className="hover:text-gray-400">RSS</a> · <a href={feeds.json} className="hover:text-gray-400">JSON Feed</a>
+            </>
+          )}
         </footer>
       </div>
     </>
