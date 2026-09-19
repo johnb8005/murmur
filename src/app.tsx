@@ -9,6 +9,7 @@ import Login from "./ui/login";
 import Settings from "./ui/settings";
 import SharePage from "./ui/share";
 import LinkDevice from "./ui/link";
+import TagPage from "./ui/tags";
 
 /** The network is private: every page but sign-in and device links needs an account. */
 const RequireAuth = ({ children }: { children: React.ReactNode }) => {
@@ -28,6 +29,7 @@ const App = () => (
           <Route path="/link/:token" element={<LinkDevice />} />
           <Route path="/p/:id" element={<RequireAuth><PostPage /></RequireAuth>} />
           <Route path="/u/:username" element={<RequireAuth><Profile /></RequireAuth>} />
+          <Route path="/t/:tag" element={<RequireAuth><TagPage /></RequireAuth>} />
           <Route path="/settings" element={<RequireAuth><Settings /></RequireAuth>} />
           <Route path="/share" element={<RequireAuth><SharePage /></RequireAuth>} />
           <Route path="*" element={<RequireAuth><Timeline /></RequireAuth>} />

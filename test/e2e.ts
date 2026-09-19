@@ -74,10 +74,25 @@ try {
   await pa.getByPlaceholder("Something worth sharing?").waitFor();
   expect(true, `account @${username} created on device A and signed in`);
 
-  await pa.getByPlaceholder("Something worth sharing?").fill("hello from device A https://example.com/");
-  await pa.getByRole("button", { name: "Post" }).click();
+  await pa.getByPlaceholder("Something worth sharing?").fill("hello from device A https://example.com/ #e2e");
+  await pa.getByRole("button", { name: "Murmur", exact: true }).click();
   await pa.getByText("hello from device A").first().waitFor();
-  expect(true, "device A posted");
+  await pa.locator("article").first().getByRole("link", { name: "#e2e" }).first().waitFor();
+  expect(true, "device A posted, the #hashtag became a label");
+
+  // a private murmur, tagged through the separate field: only its author sees it
+  await pa.getByRole("button", { name: "Tags" }).click();
+  await pa.getByLabel("Tags").fill("secret, E2E");
+  await pa.getByRole("switch", { name: "Everyone" }).click();
+  await pa.getByPlaceholder("Something worth sharing?").fill("a note to self");
+  await pa.getByRole("button", { name: "Murmur to myself" }).click();
+  const privateCard = pa.locator("article", { hasText: "a note to self" });
+  await privateCard.getByText("Only you").waitFor();
+  const privateId = (await privateCard.getAttribute("id"))!;
+  expect(privateId && (await privateCard.getByRole("link", { name: "#secret" }).count()) === 1, "a private murmur shows 'Only you' and its labels");
+  await pa.goto(`${ORIGIN}/t/secret`);
+  await pa.getByText("a note to self").first().waitFor();
+  expect(true, "the tag page lists the author's private murmur");
 
   // A shared post URL unfurls to nothing specific
   const postHtml = await (await fetch(`${ORIGIN}/p/whatever`)).text();
@@ -92,7 +107,8 @@ try {
   });
   expect(feedUrls.rss.startsWith(`${ORIGIN}/feed.xml?token=`), "feed URL carries the token");
   const rss = await fetch(feedUrls.rss);
-  expect(rss.status === 200 && (await rss.text()).includes("hello from device A"), "RSS feed opens with the token, no cookie");
+  const rssText = await rss.text();
+  expect(rss.status === 200 && rssText.includes("hello from device A") && rssText.includes("<category>e2e</category>"), "RSS feed opens with the token, no cookie, and carries the labels");
   expect((await fetch(`${ORIGIN}/feed.xml?token=wrong`)).status === 401, "a wrong feed token is refused");
 
   // device link: made on A ...
@@ -116,6 +132,27 @@ try {
   await pc.goto(url);
   await pc.getByText(/expired or was already used/).waitFor();
   expect(true, "a used device link is refused");
+
+  // another member never sees the private murmur: not in the timeline, the profile, the tag page or by URL
+  current = pc;
+  await pc.goto(`${ORIGIN}/login`);
+  await pc.getByRole("button", { name: "Create account" }).click();
+  await pc.getByPlaceholder("username").fill(`${username}b`);
+  await pc.getByText(`@${username}b is free`).waitFor();
+  await pc.getByRole("button", { name: "Create account with passkey" }).click();
+  await pc.waitForURL(`${ORIGIN}/`);
+  await pc.getByText("hello from device A").first().waitFor();
+  expect((await pc.getByText("a note to self").count()) === 0, "another member's timeline has the public murmur, not the private one");
+  await pc.goto(`${ORIGIN}/u/${username}`);
+  await pc.getByText("hello from device A").first().waitFor();
+  expect((await pc.getByText("a note to self").count()) === 0, "nor does the author's profile as seen by them");
+  await pc.goto(`${ORIGIN}/t/secret`);
+  await pc.getByText("No murmur carries #secret.").waitFor();
+  await pc.goto(`${ORIGIN}/p/${privateId}`);
+  await pc.getByText("no such post").waitFor();
+  const byApi = await pc.evaluate(async (id) => (await fetch(`/api/posts/${id}`)).status, privateId);
+  expect(byApi === 404, "the private murmur's page and API answer 404 to them");
+  current = pb;
 
   // B is a real second passkey: it can sign in on its own after signing out
   await pb.goto(`${ORIGIN}/settings`);

@@ -10,7 +10,7 @@ import type { AuthenticationResponseJSON, RegistrationResponseJSON } from "@simp
 import { db, str, num } from "./db";
 import * as auth from "./auth";
 import { ensurePreviews, previewsFor, prunePreviews, refreshPreview } from "./preview";
-import { extractLinks, POST_MAX, COMMENT_MAX, type Author, type Post, type Comment } from "../shared/links";
+import { extractLinks, postTags, normalizeTag, POST_MAX, COMMENT_MAX, TAG_MAX, TAGS_MAX, type Author, type Post, type Comment } from "../shared/links";
 
 export interface Context {
   /** bearer token from the request, if any */
@@ -66,11 +66,14 @@ const PreviewSchema = z.object({
   image: z.string().nullable(),
   siteName: z.string().nullable(),
 });
+const Tag = z.string().trim().min(1).max(TAG_MAX + 1);
 const PostSchema = z.object({
   id: z.string(),
   text: z.string(),
   link: z.string().nullable(),
   ref: z.string().nullable(),
+  tags: z.array(z.string()),
+  private: z.boolean(),
   createdAt: z.string(),
   author: AuthorSchema,
   preview: PreviewSchema.nullable(),
@@ -85,28 +88,35 @@ const PasskeySchema = z.object({ id: z.string(), name: z.string().nullable(), cr
 // ---------- loading ----------
 
 const POST_SELECT = `
-  SELECT p.id, p.text, p.link, p.ref, p.created_at,
+  SELECT p.id, p.text, p.link, p.ref, p.private, p.created_at,
          u.id AS uid, u.username, u.display_name,
+         (SELECT group_concat(tag, ' ') FROM (SELECT tag FROM post_tags t WHERE t.post_id = p.id ORDER BY tag)) AS tags,
          (SELECT COUNT(*) FROM likes l WHERE l.post_id = p.id) AS likes,
          (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) AS comments,
          EXISTS (SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = ?) AS liked
   FROM posts p JOIN users u ON u.id = p.user_id`;
 
 interface LoadOpts {
+  /** who is looking: private posts are only loaded for their author */
   viewerId?: string | null;
   limit?: number;
   before?: string;
   authorId?: string;
   id?: string;
+  tag?: string;
 }
 
-export const loadPosts = async ({ viewerId = null, limit = 50, before, authorId, id }: LoadOpts): Promise<Post[]> => {
-  const where: string[] = [];
-  const args: (string | number | null)[] = [viewerId ?? ""];
+/** Posts the viewer may see: everyone's public ones plus the viewer's own private ones. */
+const VISIBLE = "(p.private = 0 OR p.user_id = ?)";
+
+export const loadPosts = async ({ viewerId = null, limit = 50, before, authorId, id, tag }: LoadOpts): Promise<Post[]> => {
+  const where: string[] = [VISIBLE];
+  const args: (string | number | null)[] = [viewerId ?? "", viewerId ?? ""];
   if (id) where.push("p.id = ?"), args.push(id);
   if (authorId) where.push("p.user_id = ?"), args.push(authorId);
+  if (tag) where.push("EXISTS (SELECT 1 FROM post_tags t WHERE t.post_id = p.id AND t.tag = ?)"), args.push(tag);
   if (before) where.push("p.created_at < ?"), args.push(before);
-  const sql = `${POST_SELECT}${where.length ? " WHERE " + where.join(" AND ") : ""} ORDER BY p.created_at DESC LIMIT ?`;
+  const sql = `${POST_SELECT} WHERE ${where.join(" AND ")} ORDER BY p.created_at DESC LIMIT ?`;
   args.push(limit);
   const res = await db.execute({ sql, args });
 
@@ -115,6 +125,8 @@ export const loadPosts = async ({ viewerId = null, limit = 50, before, authorId,
     text: str(r, "text") || "",
     link: str(r, "link"),
     ref: str(r, "ref"),
+    tags: (str(r, "tags") || "").split(" ").filter(Boolean),
+    private: num(r, "private") > 0,
     createdAt: str(r, "created_at")!,
     author: { id: str(r, "uid")!, username: str(r, "username")!, displayName: str(r, "display_name")! },
     likes: num(r, "likes"),
@@ -147,6 +159,22 @@ const loadComments = async (postId: string): Promise<Comment[]> => {
 const postOwnerId = async (id: string) => {
   const res = await db.execute({ sql: `SELECT user_id FROM posts WHERE id = ?`, args: [id] });
   return res.rows[0] ? str(res.rows[0], "user_id") : null;
+};
+
+/** The post's author id if `viewer` may see the post (it exists and is public or theirs), else null. */
+const visiblePostOwnerId = async (id: string, viewer: Author) => {
+  const res = await db.execute({ sql: `SELECT user_id FROM posts p WHERE p.id = ? AND ${VISIBLE}`, args: [id, viewer.id] });
+  return res.rows[0] ? str(res.rows[0], "user_id") : null;
+};
+
+/** Tags on posts the viewer may see, most used first. */
+const loadTags = async (viewerId: string): Promise<{ tag: string; count: number }[]> => {
+  const res = await db.execute({
+    sql: `SELECT t.tag, COUNT(*) AS n FROM post_tags t JOIN posts p ON p.id = t.post_id WHERE ${VISIBLE}
+          GROUP BY t.tag ORDER BY n DESC, t.tag ASC LIMIT 200`,
+    args: [viewerId],
+  });
+  return res.rows.map((r) => ({ tag: str(r, "tag")!, count: num(r, "n") }));
 };
 
 // ---------- health ----------
@@ -302,10 +330,19 @@ const feed = authed
 // ---------- posts ----------
 
 const list = authed
-  .route({ method: "GET", path: "/posts", summary: "Timeline, newest first" })
-  .input(z.object({ limit: z.coerce.number().int().min(1).max(100).default(30), before: z.string().optional() }).optional())
+  .route({ method: "GET", path: "/posts", summary: "Timeline, newest first (your private posts included; ?tag= filters by label)" })
+  .input(z.object({ limit: z.coerce.number().int().min(1).max(100).default(30), before: z.string().optional(), tag: Tag.optional() }).optional())
   .output(z.array(PostSchema))
-  .handler(({ input, context }) => loadPosts({ viewerId: context.user.id, limit: input?.limit ?? 30, before: input?.before }));
+  .handler(({ input, context }) => {
+    const tag = input?.tag ? normalizeTag(input.tag) : undefined;
+    if (input?.tag && !tag) return [];
+    return loadPosts({ viewerId: context.user.id, limit: input?.limit ?? 30, before: input?.before, tag: tag ?? undefined });
+  });
+
+const tags = authed
+  .route({ method: "GET", path: "/tags", summary: "Labels in use, most used first" })
+  .output(z.array(z.object({ tag: z.string(), count: z.number() })))
+  .handler(({ context }) => loadTags(context.user.id));
 
 const get = authed
   .route({ method: "GET", path: "/posts/{id}", summary: "One post with its comments" })
@@ -318,18 +355,31 @@ const get = authed
   });
 
 const create = authed
-  .route({ method: "POST", path: "/posts", summary: "Post" })
-  .input(z.object({ text: z.string().trim().min(1).max(POST_MAX) }))
+  .route({ method: "POST", path: "/posts", summary: "Post. Tags come from #hashtags in the text and/or `tags`; `private` keeps it to yourself" })
+  .input(
+    z.object({
+      text: z.string().trim().min(1).max(POST_MAX),
+      tags: z.array(Tag).max(TAGS_MAX * 2).optional(),
+      private: z.boolean().optional(),
+    })
+  )
   .output(z.object({ post: PostSchema, previews: z.record(z.string(), z.string().nullable()) }))
   .handler(async ({ input, context }) => {
     const id = auth.newId();
     const { link, ref } = extractLinks(input.text);
+    const tags = postTags(input.text, input.tags ?? []);
     const createdAt = now();
     // `date` is a leftover from the single-admin version; databases created by it have it NOT NULL
-    await db.execute({
-      sql: `INSERT INTO posts (id, user_id, date, text, link, ref, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      args: [id, context.user.id, createdAt.slice(0, 10), input.text, link, ref, createdAt],
-    });
+    await db.batch(
+      [
+        {
+          sql: `INSERT INTO posts (id, user_id, date, text, link, ref, private, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          args: [id, context.user.id, createdAt.slice(0, 10), input.text, link, ref, input.private ? 1 : 0, createdAt],
+        },
+        ...tags.map((tag) => ({ sql: `INSERT INTO post_tags (post_id, tag) VALUES (?, ?)`, args: [id, tag] })),
+      ],
+      "write"
+    );
     const previews = await ensurePreviews([link, ref].filter((u): u is string => !!u));
     const [post] = await loadPosts({ viewerId: context.user.id, id, limit: 1 });
     return { post, previews };
@@ -347,6 +397,7 @@ const remove = authed
       [
         { sql: `DELETE FROM likes WHERE post_id = ?`, args: [input.id] },
         { sql: `DELETE FROM comments WHERE post_id = ?`, args: [input.id] },
+        { sql: `DELETE FROM post_tags WHERE post_id = ?`, args: [input.id] },
         { sql: `DELETE FROM posts WHERE id = ?`, args: [input.id] },
       ],
       "write"
@@ -360,7 +411,7 @@ const like = authed
   .input(z.object({ id: z.string() }))
   .output(z.object({ liked: z.boolean(), likes: z.number() }))
   .handler(async ({ input, context }) => {
-    if (!(await postOwnerId(input.id))) throw new ORPCError("NOT_FOUND", { message: "no such post" });
+    if (!(await visiblePostOwnerId(input.id, context.user))) throw new ORPCError("NOT_FOUND", { message: "no such post" });
     const del = await db.execute({ sql: `DELETE FROM likes WHERE post_id = ? AND user_id = ?`, args: [input.id, context.user.id] });
     const liked = del.rowsAffected === 0;
     if (liked) await db.execute({ sql: `INSERT INTO likes (post_id, user_id, created_at) VALUES (?, ?, ?)`, args: [input.id, context.user.id, now()] });
@@ -373,7 +424,7 @@ const comment = authed
   .input(z.object({ id: z.string(), text: z.string().trim().min(1).max(COMMENT_MAX) }))
   .output(CommentSchema)
   .handler(async ({ input, context }) => {
-    if (!(await postOwnerId(input.id))) throw new ORPCError("NOT_FOUND", { message: "no such post" });
+    if (!(await visiblePostOwnerId(input.id, context.user))) throw new ORPCError("NOT_FOUND", { message: "no such post" });
     const id = auth.newId();
     const createdAt = now();
     await db.execute({ sql: `INSERT INTO comments (id, post_id, user_id, text, created_at) VALUES (?, ?, ?, ?, ?)`, args: [id, input.id, context.user.id, input.text, createdAt] });
@@ -397,7 +448,7 @@ const deleteComment = authed
 // ---------- users ----------
 
 const getUser = authed
-  .route({ method: "GET", path: "/users/{username}", summary: "A user and their posts" })
+  .route({ method: "GET", path: "/users/{username}", summary: "A user and their posts (private ones only when they are you)" })
   .input(z.object({ username: Username, before: z.string().optional() }))
   .output(z.object({ user: AuthorSchema, posts: z.array(PostSchema) }))
   .handler(async ({ input, context }) => {
@@ -441,7 +492,7 @@ export const router = {
     linkFinish,
     feed,
   },
-  posts: { list, get, create, delete: remove, like, comment, deleteComment },
+  posts: { list, get, create, delete: remove, like, comment, deleteComment, tags },
   users: { get: getUser },
   previews: { refresh },
 };

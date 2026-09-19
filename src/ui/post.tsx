@@ -3,20 +3,51 @@ import { Link, useNavigate } from "react-router-dom";
 import { api, errText, timeAgo } from "../api";
 import { useAuth } from "../auth";
 import { Icon } from "../icons";
-import { host, APP_NAME, type Post, type Preview } from "../../shared/links";
+import { host, normalizeTag, APP_NAME, HASHTAG_RE, type Post, type Preview } from "../../shared/links";
+
+/** A label: links to the tag's page. */
+export const TagChip = ({ tag, active = false, count }: { tag: string; active?: boolean; count?: number }) => (
+  <Link
+    to={`/t/${encodeURIComponent(tag)}`}
+    onClick={(e) => e.stopPropagation()}
+    className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 font-mono text-xs transition-colors ${
+      active
+        ? "border-blue-300/60 bg-blue-400/15 text-blue-100"
+        : "border-white/10 bg-white/[0.04] text-gray-400 hover:border-blue-300/50 hover:text-blue-200"
+    }`}
+  >
+    #{tag}
+    {count !== undefined && <span className="text-gray-600">{count}</span>}
+  </Link>
+);
 
 const URL_RE = /(https?:\/\/[^\s<>"')\]]+)/g;
+const IS_URL = /^https?:\/\//i;
 
-/** Post text with URLs turned into links and line breaks kept. */
+/** Plain text with #hashtags linked to their tag page. */
+const Hashtags = ({ text }: { text: string }) =>
+  text.split(HASHTAG_RE).map((part, i) => {
+    if (i % 2 === 0) return <React.Fragment key={i}>{part}</React.Fragment>;
+    const tag = normalizeTag(part);
+    return tag ? (
+      <Link key={i} to={`/t/${encodeURIComponent(tag)}`} className="text-blue-300/90 hover:text-blue-200" onClick={(e) => e.stopPropagation()}>
+        #{part}
+      </Link>
+    ) : (
+      <React.Fragment key={i}>#{part}</React.Fragment>
+    );
+  });
+
+/** Post text with URLs turned into links, #hashtags linked and line breaks kept. */
 export const Text = ({ text, className = "" }: { text: string; className?: string }) => (
   <p className={`text-gray-100 leading-relaxed whitespace-pre-line break-words ${className}`}>
     {text.split(URL_RE).map((part, i) =>
-      URL_RE.test(part) ? (
+      IS_URL.test(part) ? (
         <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="text-blue-300/90 hover:text-blue-200 break-all" onClick={(e) => e.stopPropagation()}>
           {part.replace(/^https?:\/\/(www\.)?/, "")}
         </a>
       ) : (
-        <React.Fragment key={i}>{part}</React.Fragment>
+        <Hashtags key={i} text={part} />
       )
     )}
   </p>
@@ -141,14 +172,29 @@ export const PostCard = ({ post, detail = false, onChange }: Props) => {
           <span className="text-gray-100 font-medium group-hover:text-white">{post.author.displayName}</span>
           <span className="ml-2 font-mono text-xs text-gray-500">@{post.author.username}</span>
         </Link>
-        <Link to={`/p/${post.id}`} onClick={(e) => e.stopPropagation()} className="font-mono text-xs text-gray-500 hover:text-gray-300 shrink-0" title={new Date(post.createdAt).toLocaleString()}>
-          {timeAgo(post.createdAt)}
-        </Link>
+        <span className="flex items-center gap-3 shrink-0 font-mono text-xs text-gray-500">
+          {post.private && (
+            <span className="inline-flex items-center gap-1 text-amber-300/80" title="Only you can see this">
+              <Icon name="lock" size={12} />
+              Only you
+            </span>
+          )}
+          <Link to={`/p/${post.id}`} onClick={(e) => e.stopPropagation()} className="hover:text-gray-300" title={new Date(post.createdAt).toLocaleString()}>
+            {timeAgo(post.createdAt)}
+          </Link>
+        </span>
       </div>
 
       <div className="mt-2">
         <Text text={post.text} className={detail ? "text-lg" : ""} />
       </div>
+      {post.tags.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1.5" aria-label="Labels">
+          {post.tags.map((t) => (
+            <TagChip key={t} tag={t} />
+          ))}
+        </div>
+      )}
       {post.link && <PreviewCard url={post.link} preview={post.preview} />}
       {post.ref && post.refPreview?.title && (
         <a href={post.ref} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="mt-2 inline-flex items-center gap-1.5 max-w-full font-mono text-xs text-gray-500 hover:text-gray-300">
@@ -167,9 +213,11 @@ export const PostCard = ({ post, detail = false, onChange }: Props) => {
           <Icon name="comment" size={16} />
           {post.comments > 0 && post.comments}
         </Link>
-        <button onClick={share} className="btn-quiet hover:text-emerald-300" title="Share">
-          <Icon name="share" size={16} />
-        </button>
+        {!post.private && (
+          <button onClick={share} className="btn-quiet hover:text-emerald-300" title="Share">
+            <Icon name="share" size={16} />
+          </button>
+        )}
         {me?.id === post.author.id && (
           <button onClick={remove} disabled={busy} className="btn-quiet hover:text-red-300 ml-auto" title="Delete">
             <Icon name="trash" size={16} />

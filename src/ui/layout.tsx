@@ -3,7 +3,7 @@ import { Link, NavLink } from "react-router-dom";
 import { api } from "../api";
 import { useAuth } from "../auth";
 import { Icon } from "../icons";
-import { APP_NAME } from "../../shared/links";
+import { APP_NAME, POST_NOUN } from "../../shared/links";
 
 /** Chrome's install prompt, if the browser offered one and the app isn't installed yet. */
 const useInstallPrompt = () => {
@@ -68,7 +68,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
             )}
             {me && (
               <>
-                <NavLink to={`/u/${me.username}`} className="btn-quiet" title="Your posts">
+                <NavLink to={`/u/${me.username}`} className="btn-quiet" title={`Your ${POST_NOUN}s`}>
                   <Icon name="user" size={16} />
                   <span className="hidden sm:inline">@{me.username}</span>
                 </NavLink>
