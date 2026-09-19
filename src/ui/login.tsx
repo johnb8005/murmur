@@ -69,8 +69,8 @@ const Login = () => {
             <input className="field mt-3 font-mono text-sm" placeholder="username" value={username} onChange={(e) => setUsername(e.target.value)} autoCapitalize="none" autoCorrect="off" />
           </details>
           <p className="font-mono text-xs text-gray-600">
-            New device? On one where you are signed in, open Settings → "Add another device" and scan the QR code here. Or pick "use a
-            phone or tablet" in the passkey prompt.
+            New device? On one where you are signed in, open your profile, tap "Add another device" and scan the QR code here. Or pick
+            "use a phone or tablet" in the passkey prompt.
           </p>
         </div>
       ) : (

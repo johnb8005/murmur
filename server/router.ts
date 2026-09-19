@@ -289,12 +289,19 @@ const removePasskey = authed
   .output(z.object({ deleted: z.boolean() }))
   .handler(({ input, context }) => guard(async () => ({ deleted: await auth.removePasskey(context.user.id, input.id) })));
 
-// device links: add a device that has no passkey yet (see server/auth.ts)
+// device links: add a device that has no passkey yet (see server/auth.ts). Minting one needs a
+// fresh passkey check on the inviting device: linkChallenge, then linkCreate with the assertion.
+
+const linkChallenge = authed
+  .route({ method: "POST", path: "/auth/link/challenge", summary: "Start adding another device: a passkey check on this one" })
+  .output(z.object({ challengeId: z.string(), options: WebAuthnJson }))
+  .handler(({ context }) => auth.deviceLinkChallenge(context.user));
 
 const linkCreate = authed
-  .route({ method: "POST", path: "/auth/link", summary: "Make a short-lived link that adds another device to my account" })
+  .route({ method: "POST", path: "/auth/link", summary: "Make a short-lived link that adds another device to my account (answers linkChallenge)" })
+  .input(z.object({ challengeId: z.string(), response: WebAuthnJson }))
   .output(z.object({ token: z.string(), expiresAt: z.string() }))
-  .handler(({ context }) => auth.createDeviceLink(context.user));
+  .handler(({ input, context }) => guard(() => auth.createDeviceLink(context.user, input.challengeId, input.response as AuthenticationResponseJSON)));
 
 const linkInfo = base
   .route({ method: "GET", path: "/auth/link/{token}", summary: "Whose account a device link adds to" })
@@ -486,6 +493,7 @@ export const router = {
     addPasskey,
     passkeys,
     removePasskey,
+    linkChallenge,
     linkCreate,
     linkInfo,
     linkOptions,

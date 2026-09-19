@@ -11,9 +11,11 @@ deployed as a container on Cloud Run.
 - **Accounts are passkeys.** Pick a unique username, your device's Face ID / Touch ID / security key is
   the credential. No passwords, no email. Settings lets you change your username and display name
   (the profile link follows the username) and add or remove passkeys.
-- **One account, many devices.** Settings → "Add another device" shows a link and a QR code. Opened on
-  a new phone or laptop (`/link/<token>`), it creates a passkey there for the same account and signs it
-  in: no passkey needed on the new device beforehand. Links are single use and expire after ten
+- **One account, many devices.** "Add another device" on your profile (or in Settings) asks for your
+  passkey on the device you hold, then shows a link and a QR code. Opened on a new phone or laptop
+  (`/link/<token>`), it creates a passkey there for the same account and signs it in: no passkey needed
+  on the new device beforehand. The inviting device notices when the new one is in. A session cookie
+  alone cannot mint a link, only a fresh passkey check can. Links are single use and expire after ten
   minutes. Passkeys synced by iCloud Keychain / Google Password Manager need no extra step.
 - **One timeline.** A post is a *murmur*: up to 500 characters; the first link gets a preview card
   (title, description, image). Like, comment, delete your own murmurs.

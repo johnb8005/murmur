@@ -1,7 +1,8 @@
 // End-to-end check of the passkey flows with Chromium's virtual authenticator: create an account on
-// device A, mint a device link, open it on device B (a separate browser context with its own
-// authenticator), finish there, and confirm B is signed in with a second passkey. Also: the
-// timeline is members-only and the feed token lets a reader in.
+// device A, mint a device link from A's profile (after a passkey check on A), open it on device B (a
+// separate browser context with its own authenticator), finish there, confirm B is signed in with a
+// second passkey and that A noticed. Also: the timeline is members-only, the feed token lets a
+// reader in, and a device link cannot be minted with the session cookie alone.
 //
 // Run against a built app: `bun run build`, then `bun test/e2e.ts` (it starts the server itself).
 
@@ -111,8 +112,17 @@ try {
   expect(rss.status === 200 && rssText.includes("hello from device A") && rssText.includes("<category>e2e</category>"), "RSS feed opens with the token, no cookie, and carries the labels");
   expect((await fetch(`${ORIGIN}/feed.xml?token=wrong`)).status === 401, "a wrong feed token is refused");
 
-  // device link: made on A ...
+  // a device link needs a fresh passkey assertion: the session cookie alone gets nothing
+  const cookieOnly = await pa.evaluate(async () => {
+    const r = await fetch("/api/auth/link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ challengeId: "nope", response: {} }) });
+    return r.status;
+  });
+  expect(cookieOnly === 400, "POST /api/auth/link without a valid passkey assertion is refused");
+
+  // device link: made on A from its own profile, after the (virtual) passkey answers the re-auth prompt ...
+  await pa.goto(`${ORIGIN}/u/${username}`);
   await pa.getByRole("button", { name: "Add another device" }).click();
+  await pa.locator("code").first().waitFor();
   const url = (await pa.locator("code").first().textContent())!.trim();
   expect(/\/link\/[A-Za-z0-9_-]{20,}$/.test(url), `device link minted: ${url.replace(/link\/.*/, "link/…")}`);
   expect((await pa.locator('img[alt="QR code of the device link"]').getAttribute("src"))!.startsWith("data:image/png"), "QR code rendered");
@@ -132,6 +142,10 @@ try {
   await pc.goto(url);
   await pc.getByText(/expired or was already used/).waitFor();
   expect(true, "a used device link is refused");
+
+  // ... and A noticed without a reload
+  await pa.getByText("New device added").waitFor({ timeout: 15_000 });
+  expect(true, "device A saw the new passkey arrive");
 
   // another member never sees the private murmur: not in the timeline, the profile, the tag page or by URL
   current = pc;

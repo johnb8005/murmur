@@ -5,7 +5,7 @@ import { api, deviceName, errText } from "../api";
 import { useAuth } from "../auth";
 import { Icon } from "../icons";
 import { APP_NAME } from "../../shared/links";
-import { DeviceLinkCard } from "./link";
+import { DeviceLinkCard, useDeviceLink } from "./link";
 
 type Passkey = { id: string; name: string | null; createdAt: string; lastUsedAt: string | null };
 type Feed = { token: string; rss: string; json: string };
@@ -15,7 +15,6 @@ const Settings = () => {
   const { me, refresh, signOut } = useAuth();
   const [passkeys, setPasskeys] = useState<Passkey[]>([]);
   const [feed, setFeed] = useState<Feed | null>(null);
-  const [linking, setLinking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -25,6 +24,7 @@ const Settings = () => {
   const [check, setCheck] = useState<{ available: boolean; reason: string | null } | null>(null);
 
   const load = useCallback(() => api.auth.passkeys().then(setPasskeys).catch((e) => setMsg({ ok: false, text: errText(e) })), []);
+  const linking = useDeviceLink(load);
 
   useEffect(() => {
     if (me) {
@@ -156,16 +156,16 @@ const Settings = () => {
             <Icon name="plus" size={14} />
             Add this device
           </button>
-          <button onClick={() => setLinking((v) => !v)} disabled={busy} className="btn-quiet">
+          <button onClick={linking.make} disabled={busy || linking.busy} className="btn-quiet">
             <Icon name="qr" size={14} />
-            Add another device
+            {linking.busy ? "Waiting for your passkey…" : "Add another device"}
           </button>
         </div>
-        {linking && <DeviceLinkCard onDone={() => { setLinking(false); load(); }} />}
+        {linking.open && <DeviceLinkCard state={linking} />}
         <p className="font-mono text-xs text-gray-600">
-          One account, many devices: each one you use gets its own passkey. "Add another device" shows a link and a QR code to open on the
-          new phone or laptop; it registers a passkey there and signs it in. Passkeys synced by iCloud Keychain or Google Password Manager
-          need no extra step.
+          One account, many devices: each one you use gets its own passkey. "Add another device" asks for your passkey here, then shows a
+          QR code and a link to open on the new phone or laptop; it registers a passkey there and signs it in. Passkeys synced by iCloud
+          Keychain or Google Password Manager need no extra step.
         </p>
       </section>
 

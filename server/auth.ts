@@ -1,8 +1,9 @@
 // Accounts: a unique username plus one or more passkeys (WebAuthn). No passwords, no email.
 // Challenges and sessions live in the database so any Cloud Run instance can finish what another
 // started. Passkeys are registered as discoverable, so sign-in needs no username (but accepts one).
-// A signed-in device can mint a short-lived device link: opened on another device, it registers a
-// passkey there for the same account and signs it in. Feed tokens let RSS readers in.
+// A signed-in device can mint a short-lived device link after a fresh passkey check: opened on
+// another device, it registers a passkey there for the same account and signs it in. Feed tokens
+// let RSS readers in.
 
 import crypto from "node:crypto";
 import {
@@ -110,9 +111,11 @@ export const adoptLegacyPosts = async () => {
 
 // ---------- challenges ----------
 
-// "device-link" rows are not WebAuthn challenges but device links (see below); "link-add" is the
-// registration challenge a device link turns into, and remembers the link it came from.
-type ChallengeKind = "register" | "add" | "login" | "device-link" | "link-add";
+// "reauth" is a sign-in challenge for an already signed-in user (proves the person is at the
+// device before something sensitive, like minting a device link). "device-link" rows are not
+// WebAuthn challenges but device links (see below); "link-add" is the registration challenge a
+// device link turns into, and remembers the link it came from.
+type ChallengeKind = "register" | "add" | "login" | "reauth" | "device-link" | "link-add";
 
 const storeChallenge = async (challenge: string, kind: ChallengeKind, extra: { username?: string; userId?: string; link?: string; ttl?: number } = {}) => {
   const id = rand();
@@ -209,8 +212,10 @@ export const addPasskey = async (user: Author, challengeId: string, response: Re
 
 // ---------- device links: add a new device to an account without any passkey on it ----------
 //
-// 1. A signed-in device calls createDeviceLink: a random, single-use token valid for ten minutes,
-//    shown as a URL / QR code.
+// 1. A signed-in device asks for a re-authentication challenge (deviceLinkChallenge) and answers it
+//    with one of the account's passkeys: a stolen session cookie or an unlocked phone left on a
+//    table is not enough to invite a new device. createDeviceLink checks the assertion and mints a
+//    random, single-use token valid for ten minutes, shown as a URL / QR code.
 // 2. The new device opens /link/<token>: deviceLinkInfo shows whose account it is,
 //    deviceLinkOptions starts a passkey registration for that account (the link stays valid, so a
 //    cancelled prompt can be retried).
@@ -221,7 +226,10 @@ export interface DeviceLink {
   expiresAt: string;
 }
 
-export const createDeviceLink = async (user: Author): Promise<DeviceLink> => {
+export const deviceLinkChallenge = (user: Author) => reauthenticationOptions(user);
+
+export const createDeviceLink = async (user: Author, challengeId: string, response: AuthenticationResponseJSON): Promise<DeviceLink> => {
+  await reauthenticate(user, challengeId, response);
   const token = await storeChallenge("", "device-link", { userId: user.id, username: user.username, ttl: DEVICE_LINK_TTL_MS });
   return { token, expiresAt: after(DEVICE_LINK_TTL_MS) };
 };
@@ -229,7 +237,7 @@ export const createDeviceLink = async (user: Author): Promise<DeviceLink> => {
 const deviceLink = async (token: string) => {
   const row = await readChallenge(token, "device-link");
   const user = row?.userId ? await userById(row.userId) : null;
-  if (!row || !user) throw new AuthError("this link has expired or was already used; make a new one in Settings");
+  if (!row || !user) throw new AuthError("this link has expired or was already used; make a new one from your profile");
   return { user, expiresAt: row.expiresAt };
 };
 
@@ -251,20 +259,24 @@ export const finishDeviceLink = async (challengeId: string, response: Registrati
 
 // ---------- sign-in ----------
 
+const allowCredentials = async (userId: string): Promise<{ id: string; transports?: string[] }[]> => {
+  const res = await db.execute({ sql: `SELECT id, transports FROM passkeys WHERE user_id = ?`, args: [userId] });
+  return res.rows.map((r) => ({ id: str(r, "id")!, transports: JSON.parse(str(r, "transports") || "[]") }));
+};
+
 export const authenticationOptions = async (rawUsername?: string | null) => {
   let allow: { id: string; transports?: string[] }[] | undefined;
   if (rawUsername) {
     const user = await userByUsername(rawUsername);
     if (!user) throw new AuthError("unknown username");
-    const res = await db.execute({ sql: `SELECT id, transports FROM passkeys WHERE user_id = ?`, args: [user.id] });
-    allow = res.rows.map((r) => ({ id: str(r, "id")!, transports: JSON.parse(str(r, "transports") || "[]") }));
+    allow = await allowCredentials(user.id);
   }
   const options = await generateAuthenticationOptions({ rpID, userVerification: "preferred", allowCredentials: allow });
   return { challengeId: await storeChallenge(options.challenge, "login"), options };
 };
 
-export const authenticate = async (challengeId: string, response: AuthenticationResponseJSON): Promise<Author> => {
-  const ch = await takeChallenge(challengeId, "login");
+/** Verify an assertion against a challenge string, bump the passkey's counter and return its owner. */
+const verifyAssertion = async (challenge: string, response: AuthenticationResponseJSON): Promise<Author> => {
   const res = await db.execute({
     sql: `SELECT p.id, p.public_key, p.counter, p.transports, u.id AS uid, u.username, u.display_name
           FROM passkeys p JOIN users u ON u.id = p.user_id WHERE p.id = ?`,
@@ -274,7 +286,7 @@ export const authenticate = async (challengeId: string, response: Authentication
   if (!row) throw new AuthError("unknown passkey");
   const v = await verifyAuthenticationResponse({
     response,
-    expectedChallenge: ch.challenge,
+    expectedChallenge: challenge,
     expectedOrigin,
     expectedRPID: rpID,
     credential: {
@@ -287,6 +299,27 @@ export const authenticate = async (challengeId: string, response: Authentication
   if (!v.verified) throw new AuthError("sign-in could not be verified");
   await db.execute({ sql: `UPDATE passkeys SET counter = ?, last_used_at = ? WHERE id = ?`, args: [v.authenticationInfo.newCounter, now(), response.id] });
   return toAuthor({ id: str(row, "uid")!, username: str(row, "username")!, display_name: str(row, "display_name")! });
+};
+
+export const authenticate = async (challengeId: string, response: AuthenticationResponseJSON): Promise<Author> => {
+  const ch = await takeChallenge(challengeId, "login");
+  return verifyAssertion(ch.challenge, response);
+};
+
+// ---------- re-authentication: a fresh passkey check on a device that is already signed in ----------
+
+/** Only this account's passkeys are offered, so the prompt cannot be answered with someone else's. */
+export const reauthenticationOptions = async (user: Author) => {
+  const options = await generateAuthenticationOptions({ rpID, userVerification: "preferred", allowCredentials: await allowCredentials(user.id) });
+  return { challengeId: await storeChallenge(options.challenge, "reauth", { userId: user.id }), options };
+};
+
+/** Throws unless `response` answers a "reauth" challenge issued to `user` with one of `user`'s passkeys. */
+export const reauthenticate = async (user: Author, challengeId: string, response: AuthenticationResponseJSON) => {
+  const ch = await takeChallenge(challengeId, "reauth");
+  if (ch.userId !== user.id) throw new AuthError("challenge does not belong to you");
+  const who = await verifyAssertion(ch.challenge, response);
+  if (who.id !== user.id) throw new AuthError("that passkey belongs to another account");
 };
 
 // ---------- passkeys of a user ----------
