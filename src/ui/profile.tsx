@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { api, errText } from "../api";
-import { APP_NAME, type Author } from "../../shared/links";
+import { APP_NAME, POST_NOUN, type Author } from "../../shared/links";
 import { PostCard } from "./post";
 import { usePostList } from "./timeline";
 
@@ -39,7 +39,7 @@ const Profile = () => {
       </header>
       {(userError || error) && <p className="font-mono text-sm text-red-300/80">{userError || error}</p>}
       {posts === null && !error && !userError && <p className="font-mono text-sm text-gray-600">Loading…</p>}
-      {posts?.length === 0 && <p className="font-mono text-sm text-gray-600">No posts yet.</p>}
+      {posts?.length === 0 && <p className="font-mono text-sm text-gray-600">No {POST_NOUN}s yet.</p>}
       {posts?.map((p) => (
         <PostCard key={p.id} post={p} onChange={(n) => update(p.id, n)} />
       ))}

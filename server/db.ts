@@ -64,6 +64,12 @@ const createTables = () =>
          created_at TEXT NOT NULL
        )`,
       `CREATE INDEX IF NOT EXISTS comments_post ON comments (post_id, created_at)`,
+      `CREATE TABLE IF NOT EXISTS post_tags (
+         post_id TEXT NOT NULL,
+         tag     TEXT NOT NULL,
+         PRIMARY KEY (post_id, tag)
+       )`,
+      `CREATE INDEX IF NOT EXISTS post_tags_tag ON post_tags (tag, post_id)`,
       `CREATE TABLE IF NOT EXISTS previews (
          url         TEXT PRIMARY KEY,
          hash        TEXT NOT NULL UNIQUE,
@@ -93,6 +99,7 @@ const LATER_COLUMNS: [table: string, column: string][] = [
   ["challenges", "user_id TEXT"],
   ["challenges", "link TEXT"],
   ["users", "feed_token TEXT"],
+  ["posts", "private INTEGER NOT NULL DEFAULT 0"],
 ];
 
 // Indexes on columns that were added later must come after the column migrations: on a database

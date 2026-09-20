@@ -15,8 +15,14 @@ deployed as a container on Cloud Run.
   a new phone or laptop (`/link/<token>`), it creates a passkey there for the same account and signs it
   in: no passkey needed on the new device beforehand. Links are single use and expire after ten
   minutes. Passkeys synced by iCloud Keychain / Google Password Manager need no extra step.
-- **One timeline.** Post up to 500 characters; the first link gets a preview card (title,
-  description, image). Like, comment, delete your own posts.
+- **One timeline.** A post is a *murmur*: up to 500 characters; the first link gets a preview card
+  (title, description, image). Like, comment, delete your own murmurs.
+- **Labels.** `#hashtags` in the text, and/or tags typed in the composer's tag field, become labels
+  on the murmur. Each links to `/t/<tag>`, which lists everything with that label and the other labels
+  in use. Feeds carry them as RSS categories / JSON Feed tags.
+- **Only me.** Flip the composer's "Everyone" switch to "Only me" and the murmur is private: it shows
+  up in your own timeline, profile, tag pages and feed with an "Only you" mark, and nobody else can
+  list it, open it, like it or comment on it.
 - **Share.** The share button uses the Web Share API (falls back to copying the link).
 - **PWA.** Installable, offline shell, and a Web Share Target: once installed on Android (or desktop
   Chrome), Murmur appears in the system share sheet next to Twitter and Slack. Shared links land in the
@@ -27,7 +33,8 @@ deployed as a container on Cloud Run.
 - **API.** oRPC at `/rpc` (used by the app) and `/api` (plain HTTP). `GET /api/health` reports
   `{status, sha, version, date}` as injected by the deploy. Everything else needs the session cookie
   or `Authorization: Bearer $ADMIN_TOKEN` (acts as the owner): `GET /api/posts`,
-  `GET /api/posts/{id}`, `GET /api/users/{username}`, `POST /api/posts {"text"}`.
+  `GET /api/posts/{id}`, `GET /api/posts?tag=`, `GET /api/tags`, `GET /api/users/{username}`,
+  `POST /api/posts {"text", "tags"?: [...], "private"?: bool}`.
 
 ## Running locally
 

@@ -21,6 +21,10 @@ export interface Post {
   link: string | null;
   /** second URL, if any */
   ref: string | null;
+  /** labels: the #hashtags in the text plus any set separately, normalized (see normalizeTag) */
+  tags: string[];
+  /** only the author sees it: never in anyone else's timeline, profile view, feed or post page */
+  private: boolean;
   createdAt: string;
   author: Author;
   preview: Preview | null;
@@ -47,10 +51,12 @@ export interface FeedOptions {
 }
 
 export const APP_NAME = "Murmur";
+/** What a post is called in the app: you murmur something. (The API keeps `posts`.) */
+export const POST_NOUN = "murmur";
 export const POST_MAX = 500;
 export const COMMENT_MAX = 500;
 
-const URL_RE = /https?:\/\/[^\s<>"')\]]+/gi;
+export const URL_RE = /https?:\/\/[^\s<>"')\]]+/gi;
 const stripTrailingPunct = (u: string) => u.replace(/[.,;:!?]+$/, "");
 
 /** The links in a post's text: first is the main link (previewed), second the ref. */
@@ -58,6 +64,33 @@ export const extractLinks = (text: string): { link: string | null; ref: string |
   const urls = [...new Set((text.match(URL_RE) || []).map(stripTrailingPunct))];
   return { link: urls[0] || null, ref: urls[1] || null };
 };
+
+// ---------- tags ----------
+
+export const TAG_MAX = 30;
+export const TAGS_MAX = 10;
+const TAG_CHARS = /^[\p{L}\p{N}_-]+$/u;
+/** A #tag in text. Not preceded by a word character, `&`, `/` or `#`, so URL fragments and `&#x27;` don't count. */
+export const HASHTAG_RE = /(?<![\p{L}\p{N}_&/#])#([\p{L}\p{N}_-]+)/gu;
+
+/** Lower-cased, without the leading #; null when it isn't a usable tag. */
+export const normalizeTag = (raw: string): string | null => {
+  const t = raw.trim().replace(/^#+/, "").toLowerCase();
+  if (!t || t.length > TAG_MAX || !TAG_CHARS.test(t) || /^[_-]+$/.test(t)) return null;
+  return t;
+};
+
+/** "a, b #c" -> ["a", "b", "c"]: a separately typed tag list, comma or whitespace separated. */
+export const parseTagList = (raw: string): string[] => uniqueTags(raw.split(/[\s,]+/).map(normalizeTag));
+
+/** The #hashtags in a post's text (URLs are skipped), in order of appearance. */
+export const extractTags = (text: string): string[] =>
+  uniqueTags([...text.replace(URL_RE, " ").matchAll(HASHTAG_RE)].map((m) => normalizeTag(m[1]!)));
+
+/** Everything a post is labelled with: hashtags in the text first, then the separate list; at most TAGS_MAX. */
+export const postTags = (text: string, extra: string[] = []): string[] => uniqueTags([...extractTags(text), ...extra.map(normalizeTag)]);
+
+const uniqueTags = (tags: (string | null)[]): string[] => [...new Set(tags.filter((t): t is string => !!t))].slice(0, TAGS_MAX);
 
 export const host = (url: string) => {
   try {
@@ -115,7 +148,7 @@ export const toRss = (posts: Post[], opts: FeedOptions) => {
       <link>${escapeXml(permalink(siteUrl, p.id))}</link>
       <guid isPermaLink="true">${escapeXml(permalink(siteUrl, p.id))}</guid>
       <dc:creator>${escapeXml(p.author.displayName)}</dc:creator>
-      <pubDate>${new Date(p.createdAt).toUTCString()}</pubDate>
+${p.tags.map((t) => `      <category>${escapeXml(t)}</category>\n`).join("")}      <pubDate>${new Date(p.createdAt).toUTCString()}</pubDate>
       <description><![CDATA[${itemHtml(p, opts)}]]></description>
     </item>`
     )
@@ -152,6 +185,7 @@ export const toJsonFeed = (posts: Post[], opts: FeedOptions) =>
         content_html: itemHtml(p, opts),
         content_text: p.text,
         authors: [{ name: p.author.displayName, url: `${opts.siteUrl}/u/${p.author.username}` }],
+        ...(p.tags.length ? { tags: p.tags } : {}),
         ...(p.preview?.image ? { image: absolute(opts, p.preview.image) } : {}),
         date_published: p.createdAt,
       })),
