@@ -25,7 +25,10 @@ deployed as a container on Cloud Run.
 - **Only me.** Flip the composer's "Everyone" switch to "Only me" and the murmur is private: it shows
   up in your own timeline, profile, tag pages and feed with an "Only you" mark, and nobody else can
   list it, open it, like it or comment on it.
-- **Share.** The share button uses the Web Share API (falls back to copying the link).
+- **Share.** The share button uses the Web Share API (falls back to copying the link) and shares
+  only the murmur's address. Chat apps unfurl it into the generic Murmur card (`public/og.jpg`, made
+  by `bun scripts/og-card.ts`): a post URL says a murmur was shared and that signing in shows it,
+  never the murmur itself.
 - **PWA.** Installable, offline shell, and a Web Share Target: once installed on Android (or desktop
   Chrome), Murmur appears in the system share sheet next to Twitter and Slack. Shared links land in the
   composer at `/share`.

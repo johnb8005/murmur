@@ -55,22 +55,34 @@ const json = (body: unknown, status = 200) =>
 
 /**
  * The built index.html, with the `<!-- og -->` placeholder swapped for the app's generic tags.
- * Every page gets the same ones on purpose: posts and profiles are only for signed-in members,
- * so a post URL pasted in a chat must not unfurl into its content.
+ * Every page gets the same card on purpose: posts and profiles are only for signed-in members,
+ * so a post URL pasted in a chat must not unfurl into its content. The card is still a good one
+ * (WhatsApp, iMessage, Slack show `/og.jpg`, 1200x630, under 300 KB); a post URL says a murmur
+ * was shared and that signing in shows it, nothing about the murmur itself.
  */
 const html = async (pathname: string): Promise<Response> => {
   const index = Bun.file(path.join(DIST, "index.html"));
   if (!(await index.exists())) return new Response("dist/ not built. Run `bun run build`.", { status: 503 });
   const url = SITE_URL + pathname;
+  const isPost = /^\/p\/[^/]+$/.test(pathname);
+  const description = isPost ? `A murmur was shared with you. ${APP_NAME} is members only: sign in to read it.` : DESCRIPTION;
   const tags = [
     `<meta property="og:site_name" content="${APP_NAME}">`,
     `<meta property="og:type" content="website">`,
     `<meta property="og:title" content="${APP_NAME}">`,
-    `<meta property="og:description" content="${escapeHtml(DESCRIPTION)}">`,
+    `<meta property="og:description" content="${escapeHtml(description)}">`,
     `<meta property="og:url" content="${escapeHtml(url)}">`,
-    `<meta property="og:image" content="${SITE_URL}/icon-512.png">`,
-    `<meta name="twitter:card" content="summary">`,
-    `<meta name="description" content="${escapeHtml(DESCRIPTION)}">`,
+    `<meta property="og:image" content="${SITE_URL}/og.jpg">`,
+    `<meta property="og:image:secure_url" content="${SITE_URL}/og.jpg">`,
+    `<meta property="og:image:type" content="image/jpeg">`,
+    `<meta property="og:image:width" content="1200">`,
+    `<meta property="og:image:height" content="630">`,
+    `<meta property="og:image:alt" content="${APP_NAME}: ${escapeHtml(DESCRIPTION)}">`,
+    `<meta name="twitter:card" content="summary_large_image">`,
+    `<meta name="twitter:title" content="${APP_NAME}">`,
+    `<meta name="twitter:description" content="${escapeHtml(description)}">`,
+    `<meta name="twitter:image" content="${SITE_URL}/og.jpg">`,
+    `<meta name="description" content="${escapeHtml(description)}">`,
     `<meta name="robots" content="noindex">`,
   ].join("\n    ");
   const body = (await index.text()).replace("<!-- og -->", tags);

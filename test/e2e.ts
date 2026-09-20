@@ -98,6 +98,10 @@ try {
   // A shared post URL unfurls to nothing specific
   const postHtml = await (await fetch(`${ORIGIN}/p/whatever`)).text();
   expect(postHtml.includes('og:title" content="Murmur"') && !postHtml.includes("hello from device A"), "post pages carry only generic Open Graph tags");
+  expect(postHtml.includes("A murmur was shared with you") && postHtml.includes(`og:image" content="${ORIGIN}/og.jpg"`), "a post URL unfurls to the 'shared with you' card");
+  const og = await fetch(`${ORIGIN}/og.jpg`);
+  const ogBytes = (await og.arrayBuffer()).byteLength;
+  expect(og.status === 200 && og.headers.get("content-type")?.startsWith("image/jpeg") && ogBytes > 10_000 && ogBytes < 300_000, `the card image is served (${Math.round(ogBytes / 1024)} KB, under WhatsApp's 300 KB)`);
 
   // feed token: the feed answers with it, and the token is in the image URLs
   await pa.goto(`${ORIGIN}/settings`);

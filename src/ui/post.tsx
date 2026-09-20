@@ -87,13 +87,17 @@ export const PreviewCard = ({ url, preview }: { url: string; preview: Preview | 
   </a>
 );
 
-/** Web Share API with a clipboard fallback. Returns what happened, for a toast. */
+/**
+ * Web Share API with a clipboard fallback. Returns what happened, for a toast. Only the address is
+ * shared, no title or text: the message then reads as a bare link, and the chat app unfurls it into
+ * the generic Murmur card (see `html` in server/index.ts), so nothing of the murmur leaks to
+ * non-members and the reader taps through to sign in.
+ */
 export const sharePost = async (post: Post): Promise<"shared" | "copied" | null> => {
   const url = `${window.location.origin}/p/${post.id}`;
-  const data = { title: `@${post.author.username} on ${APP_NAME}`, text: post.text, url };
   if (typeof navigator.share === "function") {
     try {
-      await navigator.share(data);
+      await navigator.share({ url });
       return "shared";
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") return null;
