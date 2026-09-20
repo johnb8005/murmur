@@ -8,7 +8,7 @@ import { RPCHandler } from "@orpc/server/fetch";
 import { ResponseHeadersPlugin } from "@orpc/server/plugins";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { db, migrate } from "./db";
-import { router, loadPosts, type Context } from "./router";
+import { router, loadPosts, postImage, type Context } from "./router";
 import { screenshotByHash, closeBrowser } from "./preview";
 import { readCookie, pruneAuth, adoptLegacyPosts, sessionUser, userByFeedToken, SESSION_COOKIE } from "./auth";
 import { toRss, toJsonFeed, escapeHtml, APP_NAME, type Author, type FeedOptions } from "../shared/links";
@@ -136,6 +136,29 @@ const server = Bun.serve({
           "cache-control": "private, max-age=300",
         },
       });
+    }
+
+    // a post's picture: members only, and only if they may see the post (private ones are the author's)
+    const pic = /^\/images\/([A-Za-z0-9]{6,32})$/.exec(p);
+    if (pic) {
+      const who = await viewer(req, url);
+      if (!who) return new Response("unauthorized", { status: 401, headers: { "cache-control": "no-store" } });
+      const img = await postImage(pic[1], who.user);
+      if (!img) return new Response("not found", { status: 404, headers: { "cache-control": "no-store" } });
+      return new Response(img.bytes.buffer as ArrayBuffer, {
+        headers: { "content-type": img.type, "cache-control": "private, max-age=31536000, immutable" },
+      });
+    }
+
+    // the share sheet's POST lands in the service worker (public/share-target.js); without one, drop the file and open the composer
+    if (req.method === "POST" && p === "/share") {
+      const form = await req.formData().catch(() => null);
+      const q = new URLSearchParams();
+      for (const k of ["title", "text", "url"]) {
+        const v = form?.get(k);
+        if (typeof v === "string" && v) q.set(k, v);
+      }
+      return Response.redirect(`${SITE_URL}/share?${q}`, 303);
     }
 
     const shot = /^\/previews\/([0-9a-f]{12})\.jpg$/.exec(p);

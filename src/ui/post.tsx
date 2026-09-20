@@ -189,9 +189,33 @@ export const PostCard = ({ post, detail = false, onChange }: Props) => {
         </span>
       </div>
 
-      <div className="mt-2">
-        <Text text={post.text} className={detail ? "text-lg" : ""} />
-      </div>
+      {post.text && (
+        <div className="mt-2">
+          <Text text={post.text} className={detail ? "text-lg" : ""} />
+        </div>
+      )}
+      {post.image && (
+        <a
+          href={post.image.src}
+          target="_blank"
+          rel="noopener"
+          onClick={(e) => {
+            // on the timeline the card opens the murmur; on its page the picture opens full size
+            if (!detail) e.preventDefault();
+          }}
+          className="mt-3 block overflow-hidden rounded-2xl border border-white/10 bg-black/40"
+          style={post.image.width && post.image.height ? { aspectRatio: `${post.image.width} / ${post.image.height}`, maxHeight: "70vh" } : undefined}
+        >
+          <img
+            src={post.image.src}
+            alt=""
+            width={post.image.width || undefined}
+            height={post.image.height || undefined}
+            loading="lazy"
+            className="h-full w-full object-contain"
+          />
+        </a>
+      )}
       {post.tags.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5" aria-label="Labels">
           {post.tags.map((t) => (

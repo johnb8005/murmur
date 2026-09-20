@@ -17,6 +17,11 @@ deployed as a container on Cloud Run.
   on the new device beforehand. The inviting device notices when the new one is in. A session cookie
   alone cannot mint a link, only a fresh passkey check can. Links are single use and expire after ten
   minutes. Passkeys synced by iCloud Keychain / Google Password Manager need no extra step.
+- **Pictures.** A murmur can carry one picture: the Photo button (camera or library on a phone), a
+  paste into the composer, or the Android share sheet (the installed app accepts images; the service
+  worker script `public/share-target.js` hands them to the composer). The browser shrinks it to
+  2000 px on the long side before upload; bytes live in R2 (or the `images` table without R2) and are
+  served at `/images/<id>` to members who may see the murmur. Feeds carry it as an enclosure.
 - **One timeline.** A post is a *murmur*: up to 500 characters; the first link gets a preview card
   (title, description, image). Like, comment, delete your own murmurs.
 - **Labels.** `#hashtags` in the text, and/or tags typed in the composer's tag field, become labels

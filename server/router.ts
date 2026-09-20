@@ -7,9 +7,10 @@
 import { os, ORPCError } from "@orpc/server";
 import * as z from "zod";
 import type { AuthenticationResponseJSON, RegistrationResponseJSON } from "@simplewebauthn/server";
-import { db, str, num } from "./db";
+import { db, str, num, blob } from "./db";
 import * as auth from "./auth";
 import { ensurePreviews, previewsFor, prunePreviews, refreshPreview } from "./preview";
+import { deleteImage, getImage, putImage } from "./r2";
 import { extractLinks, postTags, normalizeTag, POST_MAX, COMMENT_MAX, TAG_MAX, TAGS_MAX, type Author, type Post, type Comment } from "../shared/links";
 
 export interface Context {
@@ -67,11 +68,13 @@ const PreviewSchema = z.object({
   siteName: z.string().nullable(),
 });
 const Tag = z.string().trim().min(1).max(TAG_MAX + 1);
+const PostImageSchema = z.object({ src: z.string(), type: z.string(), width: z.number(), height: z.number() });
 const PostSchema = z.object({
   id: z.string(),
   text: z.string(),
   link: z.string().nullable(),
   ref: z.string().nullable(),
+  image: PostImageSchema.nullable(),
   tags: z.array(z.string()),
   private: z.boolean(),
   createdAt: z.string(),
@@ -88,7 +91,7 @@ const PasskeySchema = z.object({ id: z.string(), name: z.string().nullable(), cr
 // ---------- loading ----------
 
 const POST_SELECT = `
-  SELECT p.id, p.text, p.link, p.ref, p.private, p.created_at,
+  SELECT p.id, p.text, p.link, p.ref, p.private, p.created_at, p.image_type, p.image_w, p.image_h,
          u.id AS uid, u.username, u.display_name,
          (SELECT group_concat(tag, ' ') FROM (SELECT tag FROM post_tags t WHERE t.post_id = p.id ORDER BY tag)) AS tags,
          (SELECT COUNT(*) FROM likes l WHERE l.post_id = p.id) AS likes,
@@ -125,6 +128,7 @@ export const loadPosts = async ({ viewerId = null, limit = 50, before, authorId,
     text: str(r, "text") || "",
     link: str(r, "link"),
     ref: str(r, "ref"),
+    image: str(r, "image_type") ? { src: `/images/${str(r, "id")}`, type: str(r, "image_type")!, width: num(r, "image_w"), height: num(r, "image_h") } : null,
     tags: (str(r, "tags") || "").split(" ").filter(Boolean),
     private: num(r, "private") > 0,
     createdAt: str(r, "created_at")!,
@@ -165,6 +169,45 @@ const postOwnerId = async (id: string) => {
 const visiblePostOwnerId = async (id: string, viewer: Author) => {
   const res = await db.execute({ sql: `SELECT user_id FROM posts p WHERE p.id = ? AND ${VISIBLE}`, args: [id, viewer.id] });
   return res.rows[0] ? str(res.rows[0], "user_id") : null;
+};
+
+// ---------- pictures ----------
+//
+// One picture per post, shrunk by the browser first (src/image.ts). Bytes go to R2 under
+// images/<post id>; without R2 (local dev, the e2e run) they sit in the `images` table. Served at
+// /images/<post id> by server/index.ts to members who may see the post.
+
+const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+
+const storePostImage = async (postId: string, file: File) => {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const key = await putImage(`images/${postId}`, bytes, file.type);
+  if (!key) await db.execute({ sql: `INSERT OR REPLACE INTO images (post_id, bytes) VALUES (?, ?)`, args: [postId, bytes] });
+  return key;
+};
+
+const dropPostImage = async (postId: string) => {
+  const res = await db.execute({ sql: `SELECT image_key FROM posts WHERE id = ?`, args: [postId] });
+  const key = res.rows[0] ? str(res.rows[0], "image_key") : null;
+  if (key) await deleteImage(key);
+  await db.execute({ sql: `DELETE FROM images WHERE post_id = ?`, args: [postId] });
+};
+
+/** The picture of post `id` if `viewer` may see the post; null otherwise (also when there is none). */
+export const postImage = async (id: string, viewer: Author): Promise<{ bytes: Uint8Array; type: string } | null> => {
+  const res = await db.execute({ sql: `SELECT image_key, image_type FROM posts p WHERE p.id = ? AND ${VISIBLE}`, args: [id, viewer.id] });
+  const row = res.rows[0];
+  const type = row ? str(row, "image_type") : null;
+  if (!row || !type) return null;
+  const key = str(row, "image_key");
+  if (key) {
+    const stored = await getImage(key);
+    if (stored) return { bytes: stored.bytes, type };
+  }
+  const local = await db.execute({ sql: `SELECT bytes FROM images WHERE post_id = ?`, args: [id] });
+  const bytes = local.rows[0] ? blob(local.rows[0], "bytes") : null;
+  return bytes ? { bytes, type } : null;
 };
 
 /** Tags on posts the viewer may see, most used first. */
@@ -362,26 +405,49 @@ const get = authed
   });
 
 const create = authed
-  .route({ method: "POST", path: "/posts", summary: "Post. Tags come from #hashtags in the text and/or `tags`; `private` keeps it to yourself" })
+  .route({
+    method: "POST",
+    path: "/posts",
+    summary: "Post. Tags come from #hashtags in the text and/or `tags`; `private` keeps it to yourself; `image` (multipart) attaches a picture, then `text` may be empty",
+  })
   .input(
     z.object({
-      text: z.string().trim().min(1).max(POST_MAX),
+      text: z.string().trim().max(POST_MAX).default(""),
       tags: z.array(Tag).max(TAGS_MAX * 2).optional(),
       private: z.boolean().optional(),
+      image: z.file().max(IMAGE_MAX_BYTES, "pictures are limited to 10 MB").mime(IMAGE_TYPES, "JPEG, PNG, WebP or GIF only").optional(),
+      /** pixel size of `image`, as measured by the client (layout hint only) */
+      imageWidth: z.coerce.number().int().min(1).max(20000).optional(),
+      imageHeight: z.coerce.number().int().min(1).max(20000).optional(),
     })
   )
   .output(z.object({ post: PostSchema, previews: z.record(z.string(), z.string().nullable()) }))
   .handler(async ({ input, context }) => {
+    if (!input.text && !input.image) throw new ORPCError("BAD_REQUEST", { message: "say something or attach a picture" });
     const id = auth.newId();
     const { link, ref } = extractLinks(input.text);
     const tags = postTags(input.text, input.tags ?? []);
     const createdAt = now();
+    const imageKey = input.image ? await storePostImage(id, input.image) : null;
     // `date` is a leftover from the single-admin version; databases created by it have it NOT NULL
     await db.batch(
       [
         {
-          sql: `INSERT INTO posts (id, user_id, date, text, link, ref, private, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          args: [id, context.user.id, createdAt.slice(0, 10), input.text, link, ref, input.private ? 1 : 0, createdAt],
+          sql: `INSERT INTO posts (id, user_id, date, text, link, ref, private, created_at, image_key, image_type, image_w, image_h) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          args: [
+            id,
+            context.user.id,
+            createdAt.slice(0, 10),
+            input.text,
+            link,
+            ref,
+            input.private ? 1 : 0,
+            createdAt,
+            imageKey,
+            input.image ? input.image.type : null,
+            input.image ? (input.imageWidth ?? 0) : null,
+            input.image ? (input.imageHeight ?? 0) : null,
+          ],
         },
         ...tags.map((tag) => ({ sql: `INSERT INTO post_tags (post_id, tag) VALUES (?, ?)`, args: [id, tag] })),
       ],
@@ -400,6 +466,7 @@ const remove = authed
     const ownerId = await postOwnerId(input.id);
     if (!ownerId) return { deleted: false };
     if (ownerId !== context.user.id && !auth.isOwner(context.user)) throw new ORPCError("FORBIDDEN", { message: "not your post" });
+    await dropPostImage(input.id);
     await db.batch(
       [
         { sql: `DELETE FROM likes WHERE post_id = ?`, args: [input.id] },

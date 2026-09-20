@@ -14,6 +14,15 @@ export interface Preview {
   siteName: string | null;
 }
 
+/** A picture attached to a post, served by the app (members only, like previews). */
+export interface PostImage {
+  /** site-relative: /images/<post id> */
+  src: string;
+  type: string;
+  width: number;
+  height: number;
+}
+
 export interface Post {
   id: string;
   text: string;
@@ -21,6 +30,8 @@ export interface Post {
   link: string | null;
   /** second URL, if any */
   ref: string | null;
+  /** the picture, if one was attached */
+  image: PostImage | null;
   /** labels: the #hashtags in the text plus any set separately, normalized (see normalizeTag) */
   tags: string[];
   /** only the author sees it: never in anyone else's timeline, profile view, feed or post page */
@@ -117,13 +128,14 @@ const feedUrl = ({ siteUrl, token }: FeedOptions, file: string) => `${siteUrl}/$
 export const itemTitle = (p: Post) => {
   const first = p.text.split("\n")[0].trim();
   const t = first.length > 90 ? first.slice(0, 87).trimEnd() + "…" : first;
-  return t || p.preview?.title || (p.link ? host(p.link) : `@${p.author.username}`);
+  return t || p.preview?.title || (p.link ? host(p.link) : p.image ? `A picture from @${p.author.username}` : `@${p.author.username}`);
 };
 
 const itemHtml = (p: Post, opts: FeedOptions) => {
   const { siteUrl } = opts;
   const parts: string[] = [];
-  parts.push(`<p>${escapeHtml(p.text).replace(/\n/g, "<br>")}</p>`);
+  if (p.text) parts.push(`<p>${escapeHtml(p.text).replace(/\n/g, "<br>")}</p>`);
+  if (p.image) parts.push(`<p><img src="${escapeHtml(absolute(opts, p.image.src))}" width="${p.image.width}" height="${p.image.height}" alt=""></p>`);
   if (p.link) {
     const t = p.preview?.title || host(p.link);
     parts.push(
@@ -149,7 +161,7 @@ export const toRss = (posts: Post[], opts: FeedOptions) => {
       <guid isPermaLink="true">${escapeXml(permalink(siteUrl, p.id))}</guid>
       <dc:creator>${escapeXml(p.author.displayName)}</dc:creator>
 ${p.tags.map((t) => `      <category>${escapeXml(t)}</category>\n`).join("")}      <pubDate>${new Date(p.createdAt).toUTCString()}</pubDate>
-      <description><![CDATA[${itemHtml(p, opts)}]]></description>
+${p.image ? `      <enclosure url="${escapeXml(absolute(opts, p.image.src))}" type="${escapeXml(p.image.type)}" length="0" />\n` : ""}      <description><![CDATA[${itemHtml(p, opts)}]]></description>
     </item>`
     )
     .join("\n");
@@ -186,7 +198,7 @@ export const toJsonFeed = (posts: Post[], opts: FeedOptions) =>
         content_text: p.text,
         authors: [{ name: p.author.displayName, url: `${opts.siteUrl}/u/${p.author.username}` }],
         ...(p.tags.length ? { tags: p.tags } : {}),
-        ...(p.preview?.image ? { image: absolute(opts, p.preview.image) } : {}),
+        ...(p.image ? { image: absolute(opts, p.image.src) } : p.preview?.image ? { image: absolute(opts, p.preview.image) } : {}),
         date_published: p.createdAt,
       })),
     },
