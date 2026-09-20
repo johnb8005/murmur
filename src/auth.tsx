@@ -3,14 +3,21 @@ import { startAuthentication, startRegistration } from "@simplewebauthn/browser"
 import { api, deviceName } from "./api";
 import type { Author } from "../shared/links";
 
+export interface DeviceLink {
+  token: string;
+  expiresAt: string;
+}
+
 interface AuthState {
   /** undefined while loading, null when signed out */
   me: Author | null | undefined;
   refresh: () => Promise<void>;
   signIn: (username?: string) => Promise<Author>;
   register: (username: string) => Promise<Author>;
-  /** Device link from Settings on another device: registers a passkey here and signs in. */
+  /** Device link made on another device: registers a passkey here and signs in. */
   linkDevice: (token: string) => Promise<Author>;
+  /** Prove it's you with a passkey on this device, then mint a link that adds another one. */
+  createDeviceLink: () => Promise<DeviceLink>;
   signOut: () => Promise<void>;
 }
 
@@ -55,12 +62,18 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     return user;
   };
 
+  const createDeviceLink = async () => {
+    const { challengeId, options } = await api.auth.linkChallenge();
+    const response = await startAuthentication({ optionsJSON: options });
+    return api.auth.linkCreate({ challengeId, response });
+  };
+
   const signOut = async () => {
     await api.auth.logout();
     setMe(null);
   };
 
-  return <Ctx.Provider value={{ me, refresh, signIn, register, linkDevice, signOut }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ me, refresh, signIn, register, linkDevice, createDeviceLink, signOut }}>{children}</Ctx.Provider>;
 };
 
 export const useAuth = () => useContext(Ctx);
