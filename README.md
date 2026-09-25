@@ -63,7 +63,9 @@ sign-up, the device link, feed tokens.
 
 `publish.yml` builds the `Dockerfile` (Playwright image + Bun) on every push to `main` (and on `v*`
 tags) and publishes it to GitHub Container Registry as `ghcr.io/johnb8005/murmur`: `latest`, `main`
-and `sha-<short sha>` from `main`, `1.2.3` and `1.2` from a `v1.2.3` tag. It needs no repository
+and `sha-<short sha>` from `main`, `1.2.3` and `1.2` from a `v1.2.3` tag. Every tag is a multi-arch
+manifest for `linux/amd64` and `linux/arm64` (each built on a native runner), so it runs on Intel
+hosts, Apple Silicon, Graviton and a Raspberry Pi 5 alike. It needs no repository
 secrets, the workflow's own `GITHUB_TOKEN` pushes. Nothing deploys from the repository: run the image
 wherever you like and set the environment from `.env.example`:
 

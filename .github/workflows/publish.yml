@@ -1,6 +1,10 @@
 name: Publish image
 
-# Builds the Dockerfile and publishes it to GitHub Container Registry as ghcr.io/<owner>/murmur.
+# Builds the Dockerfile and publishes it to GitHub Container Registry as ghcr.io/<owner>/murmur,
+# for linux/amd64 and linux/arm64 (Apple Silicon, Graviton, Raspberry Pi 5, Ampere boxes). Each
+# platform builds on its own native runner and pushes by digest; a last job stitches the digests
+# into one multi-arch manifest per tag, so `docker pull` picks the right one.
+#
 # Nothing deploys from here: whatever runs the app (Cloud Run, a VPS, a home box) pulls the image
 # and sets the environment from .env.example (SITE_URL is the WebAuthn origin, TURSO_*, R2_*,
 # OWNER_USERNAME, optionally ADMIN_TOKEN). No repository secrets are needed: GITHUB_TOKEN pushes.
@@ -27,8 +31,19 @@ env:
   IMAGE: ghcr.io/${{ github.repository }}
 
 jobs:
-  publish:
-    runs-on: ubuntu-latest
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm # native arm runner, free for public repositories
+    name: build ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    outputs:
+      version: ${{ steps.build.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -41,7 +56,54 @@ jobs:
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then v="${GITHUB_REF_NAME}"; else v=$(git describe --tags --always 2>/dev/null || echo "${GITHUB_SHA::7}"); fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
-          echo "sha=$GITHUB_SHA version=$v"
+          echo "arch=${{ matrix.platform }}" | tr '/' '-' | sed 's/^arch=linux-/arch=/' >> "$GITHUB_OUTPUT"
+          echo "sha=$GITHUB_SHA version=$v platform=${{ matrix.platform }}"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # pushed by digest only; the merge job below gives the tags
+      - id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            GIT_VERSION=${{ steps.build.outputs.version }}
+            BUILD_DATE=${{ steps.build.outputs.date }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ steps.build.outputs.arch }}
+          cache-to: type=gha,mode=max,scope=${{ steps.build.outputs.arch }}
+
+      - run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+          echo "${{ matrix.platform }} -> $DIGEST"
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ steps.build.outputs.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
 
       - uses: docker/setup-buildx-action@v3
 
@@ -65,26 +127,21 @@ jobs:
             org.opencontainers.image.title=Murmur
             org.opencontainers.image.description=Links worth sharing, from people worth following. No algorithm.
 
-      - id: push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            GIT_SHA=${{ github.sha }}
-            GIT_VERSION=${{ steps.build.outputs.version }}
-            BUILD_DATE=${{ steps.build.outputs.date }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      # one manifest list per tag, pointing at the amd64 and arm64 images pushed above
+      - name: Merge the platform images into multi-arch tags
+        working-directory: /tmp/digests
+        run: |
+          image="${IMAGE@L}"
+          ls -1
+          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf "$image@sha256:%s " *)
+          docker buildx imagetools inspect "$image:${{ steps.meta.outputs.version }}"
 
-      # Pull what was just pushed and boot it against a throwaway database: the app starts, health
+      # Pull what was just published and boot it against a throwaway database: the app starts, health
       # reports this commit, the network is private.
       - name: Smoke test the published image
         run: |
-          ref="${IMAGE@L}@${{ steps.push.outputs.digest }}"
+          ref="${IMAGE@L}:${{ steps.meta.outputs.version }}"
           echo "published: ${{ steps.meta.outputs.tags }}"
           docker run -d --rm --name murmur -p 8080:8080 -e SITE_URL=http://localhost:8080 "$ref"
           for i in $(seq 1 60); do curl -sf http://localhost:8080/api/health >/dev/null && break; sleep 1; done
