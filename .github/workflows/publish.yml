@@ -1,0 +1,95 @@
+name: Publish image
+
+# Builds the Dockerfile and publishes it to GitHub Container Registry as ghcr.io/<owner>/murmur.
+# Nothing deploys from here: whatever runs the app (Cloud Run, a VPS, a home box) pulls the image
+# and sets the environment from .env.example (SITE_URL is the WebAuthn origin, TURSO_*, R2_*,
+# OWNER_USERNAME, optionally ADMIN_TOKEN). No repository secrets are needed: GITHUB_TOKEN pushes.
+#
+# Tags: every push to main gives `latest`, `main` and `sha-<short sha>`; a `v1.2.3` tag gives
+# `1.2.3` and `1.2`. /api/health reports the sha, version and build date baked in at build time.
+# The package is private until made public under the repository's Packages settings.
+
+on:
+  push:
+    branches: [main]
+    tags: [v*]
+  workflow_dispatch:
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # tags, for the version string
+
+      # /api/health reports these. Version is the tag on tag pushes, otherwise `git describe`
+      # (nearest tag, commits since, short sha), or the short sha when there is no tag at all.
+      - id: build
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then v="${GITHUB_REF_NAME}"; else v=$(git describe --tags --always 2>/dev/null || echo "${GITHUB_SHA::7}"); fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          echo "sha=$GITHUB_SHA version=$v"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=sha,prefix=sha-
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+          labels: |
+            org.opencontainers.image.title=Murmur
+            org.opencontainers.image.description=Links worth sharing, from people worth following. No algorithm.
+
+      - id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            GIT_VERSION=${{ steps.build.outputs.version }}
+            BUILD_DATE=${{ steps.build.outputs.date }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Pull what was just pushed and boot it against a throwaway database: the app starts, health
+      # reports this commit, the network is private.
+      - name: Smoke test the published image
+        run: |
+          ref="${IMAGE@L}@${{ steps.push.outputs.digest }}"
+          echo "published: ${{ steps.meta.outputs.tags }}"
+          docker run -d --rm --name murmur -p 8080:8080 -e SITE_URL=http://localhost:8080 "$ref"
+          for i in $(seq 1 60); do curl -sf http://localhost:8080/api/health >/dev/null && break; sleep 1; done
+          curl -sSf http://localhost:8080/api/health; echo
+          curl -sSf http://localhost:8080/api/health | grep -q "\"sha\":\"${{ github.sha }}\"" || { echo "health does not report the built sha"; docker logs murmur; exit 1; }
+          [ "$(curl -sS -o /dev/null -w '%{http_code}' http://localhost:8080/api/posts)" = 401 ] && echo "posts -> 401 without a session, as it should"
+          [ "$(curl -sS -o /dev/null -w '%{http_code}' http://localhost:8080/feed.xml)" = 401 ] && echo "feed.xml -> 401 without a token, as it should"
+          docker stop murmur

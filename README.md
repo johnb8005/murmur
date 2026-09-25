@@ -3,7 +3,7 @@
 Links worth sharing, from people worth following. No algorithm.
 
 A small, private Twitter-like app for sharing links. Bun server + Turso + R2, React 19 + Tailwind 4,
-deployed as a container on Cloud Run.
+published as a container image on GitHub Container Registry.
 
 - **Members only.** The timeline, posts, profiles, feeds and preview images all need an account;
   visitors only see the sign-in page. A post URL pasted into a chat unfurls to the generic Murmur card,
@@ -61,13 +61,26 @@ sign-up, the device link, feed tokens.
 
 ## Deploying
 
-`cloud-run.yml` builds the `Dockerfile` (Playwright image + Bun) with Cloud Build and deploys to
-Cloud Run on every push to `main` (and on `v*` tags). Secrets: `GCP_SA_KEY`, `TURSO_DATABASE_URL`,
-`TURSO_AUTH_TOKEN`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, optionally
-`ADMIN_TOKEN`. Variables: `GCP_PROJECT_ID` (required), `SITE_URL` (the public address, it is the
-WebAuthn origin), optionally `GCP_REGION`, `CLOUD_RUN_SERVICE`, `OWNER_USERNAME`, `R2_BUCKET`. Map the
-domain to the service in the Cloud Run console. The owner account (`OWNER_USERNAME`, default `johan`)
-may delete any post and inherits posts made before accounts existed.
+`publish.yml` builds the `Dockerfile` (Playwright image + Bun) on every push to `main` (and on `v*`
+tags) and publishes it to GitHub Container Registry as `ghcr.io/johnb8005/murmur`: `latest`, `main`
+and `sha-<short sha>` from `main`, `1.2.3` and `1.2` from a `v1.2.3` tag. It needs no repository
+secrets, the workflow's own `GITHUB_TOKEN` pushes. Nothing deploys from the repository: run the image
+wherever you like and set the environment from `.env.example`:
+
+```sh
+docker run -p 8080:8080 \
+  -e SITE_URL=https://murmur.example.com \
+  -e TURSO_DATABASE_URL=libsql://... -e TURSO_AUTH_TOKEN=... \
+  -e R2_ACCOUNT_ID=... -e R2_ACCESS_KEY_ID=... -e R2_SECRET_ACCESS_KEY=... -e R2_BUCKET=... \
+  -e OWNER_USERNAME=johan -e ADMIN_TOKEN=... \
+  ghcr.io/johnb8005/murmur:latest
+```
+
+`SITE_URL` must be the address people open the app from: it is the WebAuthn origin. Without the
+`R2_*` variables, preview screenshots and pictures live in the database; without `TURSO_*`, in a
+local SQLite file inside the container (gone with it). `/api/health` reports the commit, version and
+build date baked in by the workflow. The owner account (`OWNER_USERNAME`, default `johan`) may delete
+any post and inherits posts made before accounts existed.
 
 ## Layout
 
