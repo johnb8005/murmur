@@ -26,6 +26,8 @@ jobs:
           [ "$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' -d '{"text":"x"}' http://localhost:8080/api/posts)" = 401 ]
           # a shared post URL unfurls to the generic card only
           curl -sSf http://localhost:8080/p/abc123 | grep -q 'og:title" content="Murmur"'
+          curl -sSf http://localhost:8080/p/abc123 | grep -q 'A murmur was shared with you'
+          curl -sSf -o /dev/null -w 'og.jpg -> %{http_code} %{content_type} %{size_download}B\n' http://localhost:8080/og.jpg
           curl -sSf "http://localhost:8080/api/auth/username/johan"; echo
       - name: Passkey flows in a browser (sign-up, device link, feed token)
         run: bunx playwright install --with-deps chromium && bun test/e2e.ts

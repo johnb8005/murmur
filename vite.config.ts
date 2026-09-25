@@ -30,23 +30,32 @@ export default defineConfig({
           { src: "/icon-512.png", sizes: "512x512", type: "image/png" },
           { src: "/icon-maskable-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
         ],
-        // Android (and desktop Chrome) list the installed app in the share sheet; the share lands on /share
+        // Android (and desktop Chrome) list the installed app in the share sheet; the share lands on /share.
+        // Pictures need a POST, which public/share-target.js (in the service worker) turns into a GET
         share_target: {
           action: "/share",
-          method: "GET",
-          params: { title: "title", text: "text", url: "url" },
+          method: "POST",
+          enctype: "multipart/form-data",
+          params: { title: "title", text: "text", url: "url", files: [{ name: "image", accept: ["image/*"] }] },
         },
         shortcuts: [{ name: "New post", url: "/?compose=1", icons: [{ src: "/icon-192.png", sizes: "192x192" }] }],
       },
       workbox: {
         globPatterns: ["**/*.{js,css,html,svg,png,woff2}"],
+        globIgnores: ["share-target.js"],
+        importScripts: ["share-target.js"],
         // the server renders these itself (Open Graph tags, feeds, images, API): never the cached shell
-        navigateFallbackDenylist: [/^\/api/, /^\/rpc/, /^\/feed\./, /^\/previews\//],
+        navigateFallbackDenylist: [/^\/api/, /^\/rpc/, /^\/feed\./, /^\/previews\//, /^\/images\//],
         runtimeCaching: [
           {
             urlPattern: ({ url }) => url.pathname.startsWith("/previews/"),
             handler: "CacheFirst",
             options: { cacheName: "previews", expiration: { maxEntries: 300, maxAgeSeconds: 7 * 24 * 3600 } },
+          },
+          {
+            urlPattern: ({ url }) => url.pathname.startsWith("/images/"),
+            handler: "CacheFirst",
+            options: { cacheName: "pictures", expiration: { maxEntries: 200, maxAgeSeconds: 30 * 24 * 3600 }, cacheableResponse: { statuses: [200] } },
           },
           {
             urlPattern: ({ url }) => url.origin === "https://fonts.gstatic.com" || url.origin === "https://fonts.googleapis.com",
@@ -58,6 +67,6 @@ export default defineConfig({
     }),
   ],
   server: {
-    proxy: Object.fromEntries(["/rpc", "/api", "/feed.xml", "/feed.json", "/previews"].map((p) => [p, api])),
+    proxy: Object.fromEntries(["/rpc", "/api", "/feed.xml", "/feed.json", "/previews", "/images"].map((p) => [p, api])),
   },
 });

@@ -70,6 +70,10 @@ const createTables = () =>
          PRIMARY KEY (post_id, tag)
        )`,
       `CREATE INDEX IF NOT EXISTS post_tags_tag ON post_tags (tag, post_id)`,
+      `CREATE TABLE IF NOT EXISTS images (
+         post_id TEXT PRIMARY KEY,
+         bytes   BLOB NOT NULL
+       )`,
       `CREATE TABLE IF NOT EXISTS previews (
          url         TEXT PRIMARY KEY,
          hash        TEXT NOT NULL UNIQUE,
@@ -99,6 +103,10 @@ const LATER_COLUMNS: [table: string, column: string][] = [
   ["challenges", "user_id TEXT"],
   ["challenges", "link TEXT"],
   ["users", "feed_token TEXT"],
+  ["posts", "image_key TEXT"],
+  ["posts", "image_type TEXT"],
+  ["posts", "image_w INTEGER"],
+  ["posts", "image_h INTEGER"],
   ["posts", "private INTEGER NOT NULL DEFAULT 0"],
 ];
 

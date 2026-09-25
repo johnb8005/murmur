@@ -3,7 +3,7 @@
 Links worth sharing, from people worth following. No algorithm.
 
 A small, private Twitter-like app for sharing links. Bun server + Turso + R2, React 19 + Tailwind 4,
-deployed as a container on Cloud Run.
+published as a container image on GitHub Container Registry.
 
 - **Members only.** The timeline, posts, profiles, feeds and preview images all need an account;
   visitors only see the sign-in page. A post URL pasted into a chat unfurls to the generic Murmur card,
@@ -17,6 +17,11 @@ deployed as a container on Cloud Run.
   on the new device beforehand. The inviting device notices when the new one is in. A session cookie
   alone cannot mint a link, only a fresh passkey check can. Links are single use and expire after ten
   minutes. Passkeys synced by iCloud Keychain / Google Password Manager need no extra step.
+- **Pictures.** A murmur can carry one picture: the Photo button (camera or library on a phone), a
+  paste into the composer, or the Android share sheet (the installed app accepts images; the service
+  worker script `public/share-target.js` hands them to the composer). The browser shrinks it to
+  2000 px on the long side before upload; bytes live in R2 (or the `images` table without R2) and are
+  served at `/images/<id>` to members who may see the murmur. Feeds carry it as an enclosure.
 - **One timeline.** A post is a *murmur*: up to 500 characters; the first link gets a preview card
   (title, description, image). Like, comment, delete your own murmurs.
 - **Labels.** `#hashtags` in the text, and/or tags typed in the composer's tag field, become labels
@@ -25,7 +30,10 @@ deployed as a container on Cloud Run.
 - **Only me.** Flip the composer's "Everyone" switch to "Only me" and the murmur is private: it shows
   up in your own timeline, profile, tag pages and feed with an "Only you" mark, and nobody else can
   list it, open it, like it or comment on it.
-- **Share.** The share button uses the Web Share API (falls back to copying the link).
+- **Share.** The share button uses the Web Share API (falls back to copying the link) and shares
+  only the murmur's address. Chat apps unfurl it into the generic Murmur card (`public/og.jpg`, made
+  by `bun scripts/og-card.ts`): a post URL says a murmur was shared and that signing in shows it,
+  never the murmur itself.
 - **PWA.** Installable, offline shell, and a Web Share Target: once installed on Android (or desktop
   Chrome), Murmur appears in the system share sheet next to Twitter and Slack. Shared links land in the
   composer at `/share`.
@@ -53,13 +61,26 @@ sign-up, the device link, feed tokens.
 
 ## Deploying
 
-`cloud-run.yml` builds the `Dockerfile` (Playwright image + Bun) with Cloud Build and deploys to
-Cloud Run on every push to `main` (and on `v*` tags). Secrets: `GCP_SA_KEY`, `TURSO_DATABASE_URL`,
-`TURSO_AUTH_TOKEN`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, optionally
-`ADMIN_TOKEN`. Variables: `GCP_PROJECT_ID` (required), `SITE_URL` (the public address, it is the
-WebAuthn origin), optionally `GCP_REGION`, `CLOUD_RUN_SERVICE`, `OWNER_USERNAME`, `R2_BUCKET`. Map the
-domain to the service in the Cloud Run console. The owner account (`OWNER_USERNAME`, default `johan`)
-may delete any post and inherits posts made before accounts existed.
+`publish.yml` builds the `Dockerfile` (Playwright image + Bun) on every push to `main` (and on `v*`
+tags) and publishes it to GitHub Container Registry as `ghcr.io/johnb8005/murmur`: `latest`, `main`
+and `sha-<short sha>` from `main`, `1.2.3` and `1.2` from a `v1.2.3` tag. It needs no repository
+secrets, the workflow's own `GITHUB_TOKEN` pushes. Nothing deploys from the repository: run the image
+wherever you like and set the environment from `.env.example`:
+
+```sh
+docker run -p 8080:8080 \
+  -e SITE_URL=https://murmur.example.com \
+  -e TURSO_DATABASE_URL=libsql://... -e TURSO_AUTH_TOKEN=... \
+  -e R2_ACCOUNT_ID=... -e R2_ACCESS_KEY_ID=... -e R2_SECRET_ACCESS_KEY=... -e R2_BUCKET=... \
+  -e OWNER_USERNAME=johan -e ADMIN_TOKEN=... \
+  ghcr.io/johnb8005/murmur:latest
+```
+
+`SITE_URL` must be the address people open the app from: it is the WebAuthn origin. Without the
+`R2_*` variables, preview screenshots and pictures live in the database; without `TURSO_*`, in a
+local SQLite file inside the container (gone with it). `/api/health` reports the commit, version and
+build date baked in by the workflow. The owner account (`OWNER_USERNAME`, default `johan`) may delete
+any post and inherits posts made before accounts existed.
 
 ## Layout
 

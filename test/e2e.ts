@@ -95,9 +95,45 @@ try {
   await pa.getByText("a note to self").first().waitFor();
   expect(true, "the tag page lists the author's private murmur");
 
+  // a murmur with a picture: drawn in the page, shrunk by the composer, uploaded with the post
+  const png = await pa.evaluate(() => {
+    const c = document.createElement("canvas");
+    c.width = 2400;
+    c.height = 1600;
+    const g = c.getContext("2d")!;
+    g.fillStyle = "#8b5cf6";
+    g.fillRect(0, 0, 2400, 1600);
+    g.fillStyle = "#10b981";
+    g.beginPath();
+    g.arc(1200, 800, 500, 0, Math.PI * 2);
+    g.fill();
+    return c.toDataURL("image/png").split(",")[1]!;
+  });
+  await pa.goto(`${ORIGIN}/`);
+  await pa.getByPlaceholder("Something worth sharing?").waitFor();
+  await pa.getByLabel("Picture file").setInputFiles({ name: "sunset.png", mimeType: "image/png", buffer: Buffer.from(png, "base64") });
+  await pa.getByRole("button", { name: "Remove picture" }).waitFor();
+  await pa.getByPlaceholder("Something worth sharing?").fill("a picture, no link");
+  await pa.getByRole("button", { name: "Murmur", exact: true }).click();
+  const picCard = pa.locator("article", { hasText: "a picture, no link" }).first();
+  await picCard.locator('img[src^="/images/"]').waitFor();
+  const picSrc = (await picCard.locator('img[src^="/images/"]').getAttribute("src"))!;
+  const picMeta = await pa.evaluate(async (src) => {
+    const r = await fetch(src);
+    return { status: r.status, type: r.headers.get("content-type"), bytes: (await r.arrayBuffer()).byteLength };
+  }, picSrc);
+  expect(picMeta.status === 200 && /^image\/(png|jpeg)$/.test(picMeta.type || "") && picMeta.bytes > 1000 && picMeta.bytes < 800_000, `the picture is served as ${picMeta.type}, shrunk to ${Math.round(picMeta.bytes / 1024)} KB`);
+  const picW = await picCard.locator('img[src^="/images/"]').getAttribute("width");
+  expect(picW === "2000", "the composer capped the long side at 2000 px");
+  expect((await fetch(`${ORIGIN}${picSrc}`)).status === 401, "the picture is members only");
+
   // A shared post URL unfurls to nothing specific
   const postHtml = await (await fetch(`${ORIGIN}/p/whatever`)).text();
   expect(postHtml.includes('og:title" content="Murmur"') && !postHtml.includes("hello from device A"), "post pages carry only generic Open Graph tags");
+  expect(postHtml.includes("A murmur was shared with you") && postHtml.includes(`og:image" content="${ORIGIN}/og.jpg"`), "a post URL unfurls to the 'shared with you' card");
+  const og = await fetch(`${ORIGIN}/og.jpg`);
+  const ogBytes = (await og.arrayBuffer()).byteLength;
+  expect(og.status === 200 && og.headers.get("content-type")?.startsWith("image/jpeg") && ogBytes > 10_000 && ogBytes < 300_000, `the card image is served (${Math.round(ogBytes / 1024)} KB, under WhatsApp's 300 KB)`);
 
   // feed token: the feed answers with it, and the token is in the image URLs
   await pa.goto(`${ORIGIN}/settings`);
@@ -110,6 +146,8 @@ try {
   const rss = await fetch(feedUrls.rss);
   const rssText = await rss.text();
   expect(rss.status === 200 && rssText.includes("hello from device A") && rssText.includes("<category>e2e</category>"), "RSS feed opens with the token, no cookie, and carries the labels");
+  expect(rssText.includes(`<enclosure url="${ORIGIN}${picSrc}?token=`) && rssText.includes(`type="${picMeta.type}"`), "the picture is an enclosure in the feed, with the token");
+  expect((await fetch(`${ORIGIN}${picSrc}?token=${encodeURIComponent(feedUrls.token)}`)).status === 200, "the feed token opens the picture too");
   expect((await fetch(`${ORIGIN}/feed.xml?token=wrong`)).status === 401, "a wrong feed token is refused");
 
   // a device link needs a fresh passkey assertion: the session cookie alone gets nothing
