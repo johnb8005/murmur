@@ -61,7 +61,9 @@ sign-up, the device link, feed tokens.
 
 ## Deploying
 
-`publish.yml` builds the `Dockerfile` (Playwright image + Bun) on every push to `main` (and on `v*`
+`publish.yml` builds the `Dockerfile` (two stages: build with Bun, then a slim runtime with production
+dependencies and only Chromium's headless shell for link screenshots, about a tenth of the full
+Playwright image) on every push to `main` (and on `v*`
 tags) and publishes it to GitHub Container Registry as `ghcr.io/johnb8005/murmur`: `latest`, `main`
 and `sha-<short sha>` from `main`, `1.2.3` and `1.2` from a `v1.2.3` tag. Every tag is a multi-arch
 manifest for `linux/amd64` and `linux/arm64` (each built on a native runner), so it runs on Intel
