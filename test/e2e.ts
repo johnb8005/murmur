@@ -62,6 +62,8 @@ try {
   await pa.goto(`${ORIGIN}/`);
   await pa.waitForURL(/\/login/);
   expect(pa.url().includes("/login"), "signed-out visitor is sent to /login");
+  const healthBody = await (await fetch(`${ORIGIN}/api/health`)).json();
+  expect(healthBody.status === "ok" && healthBody.db === "ok" && healthBody.storage === "database", "health reports the database round trip and where images live");
   expect((await fetch(`${ORIGIN}/api/posts`)).status === 401, "GET /api/posts is 401 without a session");
   expect((await fetch(`${ORIGIN}/feed.xml`)).status === 401, "feed.xml is 401 without a token");
 

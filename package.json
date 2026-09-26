@@ -8,6 +8,7 @@
     "dev": "bun run dev:api & bun run dev:web",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
+    "test": "bun test",
     "start": "bun server/index.ts"
   },
   "dependencies": {

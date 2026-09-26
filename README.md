@@ -82,8 +82,10 @@ docker run -p 8080:8080 \
 
 `SITE_URL` must be the address people open the app from: it is the WebAuthn origin. Without the
 `R2_*` variables, preview screenshots and pictures live in the database; without `TURSO_*`, in a
-local SQLite file inside the container (gone with it). `/api/health` reports the commit, version and
-build date baked in by the workflow. The owner account (`OWNER_USERNAME`, default `johan`) may delete
+local SQLite file inside the container (gone with it). `/api/health` does a database round trip and
+reports it with the commit, version and build date baked in by the workflow; it answers 503 when the
+database does not, and the image's `HEALTHCHECK` probes it, so `docker ps` shows healthy or not and
+Compose can wait on `condition: service_healthy`. The owner account (`OWNER_USERNAME`, default `johan`) may delete
 any post and inherits posts made before accounts existed.
 
 ## Layout
