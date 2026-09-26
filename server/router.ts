@@ -10,7 +10,7 @@ import type { AuthenticationResponseJSON, RegistrationResponseJSON } from "@simp
 import { db, str, num, blob } from "./db";
 import * as auth from "./auth";
 import { ensurePreviews, previewsFor, prunePreviews, refreshPreview } from "./preview";
-import { deleteImage, getImage, putImage } from "./r2";
+import { deleteImage, getImage, putImage, r2Enabled } from "./r2";
 import { extractLinks, postTags, normalizeTag, POST_MAX, COMMENT_MAX, TAG_MAX, TAGS_MAX, type Author, type Post, type Comment } from "../shared/links";
 
 export interface Context {
@@ -222,17 +222,55 @@ const loadTags = async (viewerId: string): Promise<{ tag: string; count: number 
 
 // ---------- health ----------
 
-/** Build info injected by the deploy workflow (cloud-run.yml); unset in local dev. */
+/** Build info baked into the image by publish.yml (Dockerfile build args); unset in local dev. */
 const BUILD = {
   sha: process.env.GIT_SHA || null,
   version: process.env.GIT_VERSION || null,
   date: process.env.BUILD_DATE || null,
 };
+const STARTED = Date.now();
 
+/** A round trip to the database, bounded so a hung connection cannot hang the probe. */
+const dbCheck = async (ms = 3000): Promise<string> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      db.execute("SELECT 1"),
+      new Promise((_, reject) => (timer = setTimeout(() => reject(new Error(`no answer in ${ms} ms`)), ms))),
+    ]);
+    return "ok";
+  } catch (e) {
+    return `error: ${e instanceof Error ? e.message : String(e)}`;
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+/**
+ * Liveness, readiness and build info in one place. The Dockerfile's HEALTHCHECK and the publish
+ * workflow's smoke test call it; so does `curl`. Answers 503 when the database does not, so a
+ * container shows "unhealthy" and Compose's `service_healthy` waits, but stays 200 without R2
+ * (pictures and previews then live in the database, which works).
+ */
 const health = base
-  .route({ method: "GET", path: "/health", summary: "Liveness + build info" })
-  .output(z.object({ status: z.literal("ok"), sha: z.string().nullable(), version: z.string().nullable(), date: z.string().nullable() }))
-  .handler(() => ({ status: "ok" as const, ...BUILD }));
+  .route({ method: "GET", path: "/health", summary: "Liveness + readiness (database round trip) + build info" })
+  .output(
+    z.object({
+      status: z.literal("ok"),
+      db: z.string(),
+      storage: z.enum(["r2", "database"]),
+      uptime: z.number(),
+      sha: z.string().nullable(),
+      version: z.string().nullable(),
+      date: z.string().nullable(),
+    })
+  )
+  .handler(async () => {
+    const dbStatus = await dbCheck();
+    const body = { status: "ok" as const, db: dbStatus, storage: r2Enabled() ? ("r2" as const) : ("database" as const), uptime: Math.round((Date.now() - STARTED) / 1000), ...BUILD };
+    if (dbStatus !== "ok") throw new ORPCError("SERVICE_UNAVAILABLE", { message: `database ${dbStatus}`, data: { ...body, status: "degraded" } });
+    return body;
+  });
 
 // ---------- auth ----------
 

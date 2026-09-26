@@ -44,4 +44,11 @@ ENV GIT_SHA=$GIT_SHA GIT_VERSION=$GIT_VERSION BUILD_DATE=$BUILD_DATE
 ENV NODE_ENV=production
 ENV PORT=8080
 EXPOSE 8080
+
+# /api/health answers 200 when the app is up and the database answers, 503 otherwise. `docker ps`
+# then shows (healthy) / (unhealthy) and Compose's `condition: service_healthy` can wait for it.
+# No curl in the slim image, so Bun does the request. Probes every 2 s for the first 30 s, then every 30 s.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --start-interval=2s --retries=3 \
+  CMD ["bun", "-e", "fetch(`http://127.0.0.1:${process.env.PORT || 8080}/api/health`).then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+
 CMD ["bun", "server/index.ts"]

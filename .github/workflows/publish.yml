@@ -10,7 +10,8 @@ name: Publish image
 # OWNER_USERNAME, optionally ADMIN_TOKEN). No repository secrets are needed: GITHUB_TOKEN pushes.
 #
 # Tags: every push to main gives `latest`, `main` and `sha-<short sha>`; a `v1.2.3` tag gives
-# `1.2.3` and `1.2`. /api/health reports the sha, version and build date baked in at build time.
+# `1.2.3` and `1.2`. /api/health reports the sha, version and build date baked in at build time,
+# and is what the image's HEALTHCHECK probes.
 # The package is private until made public under the repository's Packages settings.
 
 on:
@@ -149,4 +150,8 @@ jobs:
           curl -sSf http://localhost:8080/api/health | grep -q "\"sha\":\"${{ github.sha }}\"" || { echo "health does not report the built sha"; docker logs murmur; exit 1; }
           [ "$(curl -sS -o /dev/null -w '%{http_code}' http://localhost:8080/api/posts)" = 401 ] && echo "posts -> 401 without a session, as it should"
           [ "$(curl -sS -o /dev/null -w '%{http_code}' http://localhost:8080/feed.xml)" = 401 ] && echo "feed.xml -> 401 without a token, as it should"
+          # the image's own HEALTHCHECK must agree
+          for i in $(seq 1 30); do [ "$(docker inspect -f '{{.State.Health.Status}}' murmur)" = healthy ] && break; sleep 2; done
+          status=$(docker inspect -f '{{.State.Health.Status}}' murmur); echo "docker health: $status"
+          [ "$status" = healthy ] || { docker inspect -f '{{json .State.Health}}' murmur; exit 1; }
           docker stop murmur
