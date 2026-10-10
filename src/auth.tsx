@@ -39,7 +39,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   }, [refresh]);
 
   const signIn = async (username?: string) => {
-    const { challengeId, options } = await api.auth.loginOptions(username ? { username } : undefined);
+    const { challengeId, options } = await api.auth.loginOptions(username ? { username } : null);
     const response = await startAuthentication({ optionsJSON: options });
     const { user } = await api.auth.login({ challengeId, response });
     setMe(user);

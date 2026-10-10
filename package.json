@@ -4,26 +4,22 @@
   "private": true,
   "scripts": {
     "dev:web": "vite dev",
-    "dev:api": "bun --watch server/index.ts",
+    "dev:api": "cargo run",
     "dev": "bun run dev:api & bun run dev:web",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "test": "bun test",
-    "start": "bun server/index.ts"
+    "types": "cargo run -- export-types src/bindings.ts",
+    "test": "cargo test --release",
+    "test:e2e": "bun test/e2e.ts",
+    "start": "cargo run --release"
   },
   "dependencies": {
-    "@libsql/client": "0.18.0",
     "@orpc/client": "1.15.0",
-    "@orpc/openapi": "1.15.0",
-    "@orpc/server": "1.15.0",
     "@simplewebauthn/browser": "^14.0.0",
-    "@simplewebauthn/server": "^14.0.1",
-    "playwright": "^1.63.0",
     "qrcode": "1.5.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "react-router-dom": "^7.9.1",
-    "zod": "4.5.4"
+    "react-router-dom": "^7.9.1"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.0",
@@ -32,6 +28,7 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^6.0.0",
+    "playwright": "^1.63.0",
     "tailwindcss": "^4.1.0",
     "typescript": "^7",
     "vite": "^8.0.0",

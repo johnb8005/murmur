@@ -2,8 +2,8 @@
 
 Links worth sharing, from people worth following. No algorithm.
 
-A small, private Twitter-like app for sharing links. Bun server + Turso + R2, React 19 + Tailwind 4,
-published as a container image on GitHub Container Registry.
+A small, private Twitter-like app for sharing links. Rust server (one static binary) + Turso + R2,
+React 19 + Tailwind 4, published as a 10 MB container image on GitHub Container Registry.
 
 - **Members only.** The timeline, posts, profiles, feeds and preview images all need an account;
   visitors only see the sign-in page. A post URL pasted into a chat unfurls to the generic Murmur card,
@@ -23,7 +23,8 @@ published as a container image on GitHub Container Registry.
   2000 px on the long side before upload; bytes live in R2 (or the `images` table without R2) and are
   served at `/images/<id>` to members who may see the murmur. Feeds carry it as an enclosure.
 - **One timeline.** A post is a *murmur*: up to 500 characters; the first link gets a preview card
-  (title, description, image). Like, comment, delete your own murmurs.
+  (title, description and image from the page's meta tags; a page that declares no image gets a text
+  card). Like, comment, delete your own murmurs.
 - **Labels.** `#hashtags` in the text, and/or tags typed in the composer's tag field, become labels
   on the murmur. Each links to `/t/<tag>`, which lists everything with that label and the other labels
   in use. Feeds carry them as RSS categories / JSON Feed tags.
@@ -49,22 +50,23 @@ published as a container image on GitHub Container Registry.
 ## Running locally
 
 ```bash
-bun install
-bunx playwright install chromium          # once, for link screenshots
+bun install                               # the web app; the server needs a stable Rust toolchain
 cp .env.example .env                      # SITE_URL=http://localhost:5173 (the WebAuthn origin), local SQLite by default
-bun run dev                               # API on :8080 + Vite on :5173
+bun run dev                               # API on :8080 (cargo run) + Vite on :5173
 ```
 
-`bun run build` builds the app into `dist/`; `bun run start` serves it with the API on `$PORT`.
-`bun test/e2e.ts` (after a build) drives the passkey flows in Chromium with a virtual authenticator:
-sign-up, the device link, feed tokens.
+`bun run build` builds the app into `dist/`; `cargo build --release` builds the server;
+`bun run start` serves the built app with the API on `$PORT`. `cargo test --release` runs the unit
+tests, including a check that `src/bindings.ts` (the client types, generated from the router with
+`bun run types`) is current. `bun test/e2e.ts` (after both builds; `bunx playwright install chromium`
+once) drives the passkey flows in Chromium with a virtual authenticator: sign-up, posting, pictures,
+the device link, feed tokens.
 
 ## Deploying
 
-`publish.yml` builds the `Dockerfile` (two stages: build with Bun, then a slim runtime with production
-dependencies and only Chromium's headless shell for link screenshots, about a tenth of the full
-Playwright image) on every push to `main` (and on `v*`
-tags) and publishes it to GitHub Container Registry as `ghcr.io/johnb8005/murmur`: `latest`, `main`
+`publish.yml` builds the `Dockerfile` (Bun builds the app, Rust on Alpine builds a static binary,
+the runtime stage is distroless: binary, `dist/` and CA certificates, about 10 MB) on every push to
+`main` (and on `v*` tags) and publishes it to GitHub Container Registry as `ghcr.io/johnb8005/murmur`: `latest`, `main`
 and `sha-<short sha>` from `main`, `1.2.3` and `1.2` from a `v1.2.3` tag. Every tag is a multi-arch
 manifest for `linux/amd64` and `linux/arm64` (each built on a native runner), so it runs on Intel
 hosts, Apple Silicon, Graviton and a Raspberry Pi 5 alike. It needs no repository
@@ -81,7 +83,7 @@ docker run -p 8080:8080 \
 ```
 
 `SITE_URL` must be the address people open the app from: it is the WebAuthn origin. Without the
-`R2_*` variables, preview screenshots and pictures live in the database; without `TURSO_*`, in a
+`R2_*` variables, preview images and pictures live in the database; without `TURSO_*`, in a
 local SQLite file inside the container (gone with it). `/api/health` does a database round trip and
 reports it with the commit, version and build date baked in by the workflow; it answers 503 when the
 database does not, and the image's `HEALTHCHECK` probes it, so `docker ps` shows healthy or not and
@@ -90,9 +92,10 @@ any post and inherits posts made before accounts existed.
 
 ## Layout
 
-- `server/index.ts` static app, feeds, preview images, API; `server/router.ts` the oRPC procedures;
-  `server/auth.ts` accounts, passkeys, device links, feed tokens, sessions; `server/preview.ts` link
-  previews (meta tags first, screenshot when there is no image); `server/r2.ts` image bytes;
-  `server/db.ts` schema
-- `shared/links.ts` post model, link extraction, feeds
+- `server/` the Rust server: `http.rs` static app, feeds, pictures, the oRPC mounts; `router.rs` the
+  procedures; `auth.rs` accounts, device links, feed tokens, sessions; `webauthn.rs` passkey
+  registration and assertion checks; `preview.rs` link previews from meta tags; `r2.rs` image bytes;
+  `db.rs` schema; `links.rs` post model, link extraction, feeds
+- `shared/links.ts` the client's copy of the post model and tag helpers; `src/bindings.ts` the
+  generated API types
 - `src/` React 19 + Tailwind 4; `vite.config.ts` holds the PWA manifest and Workbox rules

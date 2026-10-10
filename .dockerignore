@@ -1,5 +1,7 @@
 node_modules
 dist
+target
+spike
 .git
 .github
 *.db
@@ -8,6 +10,3 @@ dist
 README.md
 LICENSE
 CLAUDE.md
-
-# rust spike
-spike/*/target

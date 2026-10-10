@@ -1,0 +1,56 @@
+[package]
+name = "murmur"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Murmur server: the built app, feeds, pictures and the oRPC API"
+
+[[bin]]
+name = "murmur"
+path = "server/main.rs"
+
+[workspace]
+exclude = ["spike"]
+
+[dependencies]
+axum = { version = "0.8", features = ["http1", "tokio", "json", "query", "multipart", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "fs", "signal", "time", "sync"] }
+http = "1"
+http-body-util = "0.1"
+tower = "0.5"
+orpc = "1.1"
+orpc-axum = "1.1"
+orpc-specta = "1.1"
+specta = { version = "=2.0.0-rc.22", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libsql = { version = "0.9", default-features = false, features = ["core", "remote"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "stream"] }
+rust-s3 = { package = "rust-s3", version = "0.35", default-features = false, features = ["tokio-rustls-tls"] }
+scraper = "0.23"
+regex = "1"
+fancy-regex = "0.14"
+sha1 = "0.10"
+sha2 = "0.10"
+base64 = "0.22"
+rand = "0.8"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+ciborium = "0.2"
+p256 = { version = "0.13", features = ["ecdsa"] }
+rsa = { version = "0.9", features = ["sha2"] }
+ed25519-dalek = "2"
+mime_guess = "2"
+percent-encoding = "2"
+url = "2"
+dotenvy = "0.15"
+bytes = "1"
+anyhow = "1"
+futures-util = "0.3"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

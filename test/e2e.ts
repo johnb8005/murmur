@@ -4,14 +4,15 @@
 // second passkey and that A noticed. Also: the timeline is members-only, the feed token lets a
 // reader in, and a device link cannot be minted with the session cookie alone.
 //
-// Run against a built app: `bun run build`, then `bun test/e2e.ts` (it starts the server itself).
+// Run against a built app and server: `bun run build && cargo build --release`, then `bun test/e2e.ts`
+// (it starts the server itself; MURMUR_BIN overrides the binary path).
 
 import { chromium, type Page } from "playwright";
 
 const PORT = 8090;
 const ORIGIN = `http://localhost:${PORT}`;
 
-const server = Bun.spawn(["bun", "server/index.ts"], {
+const server = Bun.spawn([process.env.MURMUR_BIN || "target/release/murmur"], {
   env: { ...process.env, PORT: String(PORT), SITE_URL: ORIGIN, TURSO_DATABASE_URL: `file:${process.cwd()}/test/e2e.db` },
   stdout: "inherit",
   stderr: "inherit",
