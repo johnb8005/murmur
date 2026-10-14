@@ -14,5 +14,5 @@
     "forceConsistentCasingInFileNames": true,
     "types": ["bun", "vite/client", "vite-plugin-pwa/client"]
   },
-  "include": ["src", "server", "shared", "vite.config.ts"]
+  "include": ["src", "shared", "test", "vite.config.ts"]
 }

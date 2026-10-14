@@ -7,17 +7,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
       - run: bun install --frozen-lockfile
-      - name: Type-check
+      - name: Type-check the app
         run: bun run typecheck
-      - name: Unit tests
-        run: bun test
+      - name: Lint the server
+        run: cargo fmt --check && cargo clippy --release --locked -- -D warnings
+      - name: Unit tests (also checks src/bindings.ts is current)
+        run: cargo test --release --locked
       - name: Build
-        run: bun run build
+        run: bun run build && cargo build --release --locked
       - name: Boot against a local db and hit the API
         run: |
-          PORT=8080 SITE_URL=http://localhost:8080 bun server/index.ts &
-          sleep 3
+          PORT=8080 SITE_URL=http://localhost:8080 ./target/release/murmur &
+          sleep 2
           curl -sSf http://localhost:8080/api/health | grep -q '"status":"ok"'
           curl -sSf http://localhost:8080/api/auth/status; echo
           curl -sSf -o /dev/null -w 'manifest -> %{http_code} %{content_type}\n' http://localhost:8080/manifest.webmanifest
@@ -31,5 +37,7 @@ jobs:
           curl -sSf http://localhost:8080/p/abc123 | grep -q 'A murmur was shared with you'
           curl -sSf -o /dev/null -w 'og.jpg -> %{http_code} %{content_type} %{size_download}B\n' http://localhost:8080/og.jpg
           curl -sSf "http://localhost:8080/api/auth/username/johan"; echo
+          # the image's healthcheck is the binary probing itself
+          PORT=8080 ./target/release/murmur health
       - name: Passkey flows in a browser (sign-up, device link, feed token)
         run: bunx playwright install --with-deps chromium && bun test/e2e.ts
