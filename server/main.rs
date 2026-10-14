@@ -67,19 +67,25 @@ async fn serve() {
             std::process::exit(1);
         }
     };
-    for (what, res) in [
-        ("migrate", app.db.migrate().await),
-        ("prune", auth::prune_auth(&app.db).await),
-        (
-            "adopt legacy posts",
-            auth::adopt_legacy_posts(&app.db, &app.site).await,
-        ),
-    ] {
-        if let Err(e) = res {
-            eprintln!("{what} failed: {e:#}");
-            std::process::exit(1);
-        }
+    if let Err(e) = app.db.migrate().await {
+        eprintln!("migrate failed: {e:#}");
+        std::process::exit(1);
     }
+    // housekeeping that requests don't wait for: expiry is checked on read anyway
+    let bg = app.clone();
+    tokio::spawn(async move {
+        for (what, res) in [
+            ("prune", auth::prune_auth(&bg.db).await),
+            (
+                "adopt legacy posts",
+                auth::adopt_legacy_posts(&bg.db, &bg.site).await,
+            ),
+        ] {
+            if let Err(e) = res {
+                eprintln!("{what} failed: {e:#}");
+            }
+        }
+    });
     let port = std::env::var("PORT")
         .ok()
         .and_then(|p| p.parse::<u16>().ok())

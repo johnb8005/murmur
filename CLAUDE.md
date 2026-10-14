@@ -27,4 +27,4 @@ A small, members-only Twitter-like app for sharing links: passkey accounts with 
 - Rust for the server (edition 2024, `cargo fmt` and `cargo clippy -- -D warnings` clean), TypeScript run by Bun for the app and the e2e test; no Node-specific tooling
 - oRPC for every client/server call; add procedures to `server/router.rs` with `Route` metadata, then `bun run types` so `src/api.ts` picks up the types. Input structs: `#[serde(default)]` on optional fields (exports as `field?`), `lenient_u32` / `lenient_bool` for anything that may arrive as a query string
 - Keep `/api/*` paths stable, they're used from curl. Picture upload on `/api/posts` takes oRPC's multipart envelope, not plain form fields
-- Additive schema changes only: new columns go in `LATER_COLUMNS` in `server/db.rs`
+- Additive schema changes only: new columns go in `LATER_COLUMNS` in `server/db.rs`, never into an existing `CREATE TABLE` (the schema version in the `meta` table is the count of tables, columns and indexes; startup skips migrations when it is current)

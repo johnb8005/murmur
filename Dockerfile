@@ -43,7 +43,7 @@ EXPOSE 8080
 # /api/health answers 200 when the app is up and the database answers, 503 otherwise. `docker ps`
 # then shows (healthy) / (unhealthy) and Compose's `condition: service_healthy` can wait for it.
 # No shell or curl in the image: the binary probes itself. Every 2 s for the first 30 s, then every 30 s.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --start-interval=2s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --start-interval=1s --retries=3 \
   CMD ["/app/murmur", "health"]
 
 ENTRYPOINT ["/app/murmur"]

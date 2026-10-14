@@ -146,8 +146,19 @@ impl Db {
         tx.commit().await.context("commit")
     }
 
-    /// Creates the schema and applies the additive migrations.
+    /// Creates the schema and applies the additive migrations, unless `meta` says this schema
+    /// version is already in: one round trip on a warm start instead of one per statement.
     pub async fn migrate(&self) -> Result<()> {
+        let current = self
+            .one("SELECT value FROM meta WHERE key = 'schema'", vec![])
+            .await
+            .ok()
+            .flatten()
+            .and_then(|r| r.str("value"))
+            .and_then(|s| s.parse::<usize>().ok());
+        if current.is_some_and(|n| n >= SCHEMA_VERSION) {
+            return Ok(());
+        }
         for sql in CREATE_TABLES {
             self.exec(sql, vec![]).await?;
         }
@@ -169,6 +180,12 @@ impl Db {
             .await?;
         self.exec("DELETE FROM sessions WHERE user_id IS NULL", vec![])
             .await?;
+        self.exec(
+            "INSERT INTO meta (key, value) VALUES ('schema', ?)
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            vec![v(SCHEMA_VERSION.to_string())],
+        )
+        .await?;
         Ok(())
     }
 }
@@ -189,7 +206,14 @@ pub fn is_unique_violation(e: &anyhow::Error) -> bool {
     format!("{e:#}").to_uppercase().contains("UNIQUE")
 }
 
+/// Grows with every table, column and index added, which is why the schema is additive only.
+const SCHEMA_VERSION: usize = CREATE_TABLES.len() + LATER_COLUMNS.len() + LATER_INDEXES.len();
+
 const CREATE_TABLES: &[&str] = &[
+    "CREATE TABLE IF NOT EXISTS meta (
+       key   TEXT PRIMARY KEY,
+       value TEXT NOT NULL
+     )",
     "CREATE TABLE IF NOT EXISTS users (
        id           TEXT PRIMARY KEY,
        username     TEXT NOT NULL UNIQUE,
@@ -294,4 +318,32 @@ const LATER_INDEXES: &[&str] =
 /// Placeholders for an `IN (...)` list.
 pub fn placeholders(n: usize) -> String {
     vec!["?"; n].join(",")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn migrate_records_the_schema_version_and_skips_next_time() {
+        let db = libsql::Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap();
+        let db = Db {
+            conn: db.connect().unwrap(),
+            remote: false,
+        };
+        db.migrate().await.unwrap();
+        let row = db
+            .one("SELECT value FROM meta WHERE key = 'schema'", vec![])
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.str("value"), Some(SCHEMA_VERSION.to_string()));
+        // a second start finds the version and returns before any DDL
+        db.exec("DROP TABLE posts", vec![]).await.unwrap();
+        db.migrate().await.unwrap();
+        assert!(db.one("SELECT 1 FROM posts", vec![]).await.is_err());
+    }
 }
