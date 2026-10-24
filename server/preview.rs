@@ -13,6 +13,7 @@ use sha1::Digest;
 use crate::app::App;
 use crate::db::{opt, placeholders, v};
 use crate::links::{Preview, clip, host, now_iso};
+use crate::net::check_url;
 
 const META_TIMEOUT: Duration = Duration::from_secs(12);
 const IMAGE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -128,6 +129,8 @@ fn parse_meta(html: &str) -> MetaTags {
 
 /// Fetch the html and read its meta tags. Err with a short reason when the page can't be read.
 async fn fetch_meta_tags(app: &App, url: &str) -> std::result::Result<(MetaTags, String), String> {
+    let parsed = reqwest::Url::parse(url).map_err(|_| "not a valid URL".to_string())?;
+    check_url(&parsed)?;
     let res = app
         .http
         .get(url)
@@ -174,6 +177,7 @@ async fn fetch_meta_tags(app: &App, url: &str) -> std::result::Result<(MetaTags,
 /// still stored as a fallback.
 async fn store_remote_image(app: &App, url: &str, image_url: &str) -> Option<(String, String)> {
     let r2 = app.r2.as_ref()?;
+    check_url(&reqwest::Url::parse(image_url).ok()?).ok()?;
     let res = app
         .http
         .get(image_url)
