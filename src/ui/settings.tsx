@@ -9,12 +9,16 @@ import { DeviceLinkCard, useDeviceLink } from "./link";
 
 type Passkey = { id: string; name: string | null; createdAt: string; lastUsedAt: string | null };
 type Feed = { token: string; rss: string; json: string };
+type Webhook = { id: string; name: string; hint: string; createdAt: string };
 
 const Settings = () => {
   document.title = `Settings · ${APP_NAME}`;
   const { me, refresh, signOut } = useAuth();
   const [passkeys, setPasskeys] = useState<Passkey[]>([]);
   const [feed, setFeed] = useState<Feed | null>(null);
+  const [webhooks, setWebhooks] = useState<Webhook[]>([]);
+  const [hookName, setHookName] = useState("");
+  const [hookUrl, setHookUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -30,6 +34,7 @@ const Settings = () => {
     if (me) {
       load();
       api.auth.feed().then(setFeed).catch(() => setFeed(null));
+      api.slack.list().then(setWebhooks).catch(() => setWebhooks([]));
       setUsername(me.username);
       setDisplayName(me.displayName);
     }
@@ -85,6 +90,29 @@ const Settings = () => {
       if (!confirm("Remove this passkey?")) return;
       await api.auth.removePasskey({ id });
       await load();
+    });
+
+  const addWebhook = () =>
+    run(async () => {
+      const hook = await api.slack.add({ name: hookName.trim(), url: hookUrl.trim() });
+      setWebhooks((hs) => [...hs, hook]);
+      setHookName("");
+      setHookUrl("");
+      return `Webhook "${hook.name}" added. Send a test message to check it.`;
+    });
+
+  const testWebhook = (hook: Webhook) =>
+    run(async () => {
+      const { error } = await api.slack.test({ id: hook.id });
+      if (error) throw new Error(`${hook.name}: ${error}`);
+      return `Test message sent to "${hook.name}".`;
+    });
+
+  const removeWebhook = (hook: Webhook) =>
+    run(async () => {
+      if (!confirm(`Remove the Slack webhook "${hook.name}"?`)) return;
+      await api.slack.remove({ id: hook.id });
+      setWebhooks((hs) => hs.filter((h) => h.id !== hook.id));
     });
 
   const copy = (text: string, what: string) => run(async () => {
@@ -186,6 +214,52 @@ const Settings = () => {
             </button>
           </div>
         )}
+      </section>
+
+      <section className="glass rounded-3xl px-6 py-5 space-y-3">
+        <h2 className="font-mono text-xs uppercase tracking-widest text-gray-500">Slack</h2>
+        {webhooks.map((h) => (
+          <div key={h.id} className="flex items-center justify-between gap-4 font-mono text-xs">
+            <span className="text-gray-300 truncate">
+              <Icon name="send" size={12} className="inline mr-2 opacity-60" />
+              {h.name}
+              <span className="text-gray-600"> · {h.hint}</span>
+            </span>
+            <span className="flex items-center gap-3 shrink-0">
+              <button onClick={() => testWebhook(h)} disabled={busy} className="text-gray-500 hover:text-gray-200 disabled:opacity-30" title="Send a test message">
+                Test
+              </button>
+              <button onClick={() => removeWebhook(h)} disabled={busy} className="text-gray-600 hover:text-red-300 disabled:opacity-30" title="Remove" aria-label={`Remove ${h.name}`}>
+                <Icon name="trash" size={14} />
+              </button>
+            </span>
+          </div>
+        ))}
+        <label className="block">
+          <span className="font-mono text-xs text-gray-500">Name</span>
+          <input className="field mt-1" value={hookName} maxLength={40} placeholder="#links in Acme" onChange={(e) => setHookName(e.target.value)} />
+        </label>
+        <label className="block">
+          <span className="font-mono text-xs text-gray-500">Webhook URL</span>
+          <input
+            className="field mt-1 font-mono text-sm"
+            value={hookUrl}
+            placeholder="https://hooks.slack.com/services/…"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            onChange={(e) => setHookUrl(e.target.value)}
+          />
+        </label>
+        <button onClick={addWebhook} disabled={busy || !hookName.trim() || !hookUrl.trim()} className="btn-quiet">
+          <Icon name="plus" size={14} />
+          Add webhook
+        </button>
+        <p className="font-mono text-xs text-gray-600">
+          Send murmurs to a Slack channel as well: create an incoming webhook for the channel in Slack (an app with "Incoming Webhooks"
+          turned on), paste its URL here, then pick Slack in the composer. The URL stays on the server; anyone holding it can post to
+          that channel. Private murmurs are never sent.
+        </p>
       </section>
 
       <section className="glass rounded-3xl px-6 py-5 space-y-3">

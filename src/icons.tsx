@@ -86,6 +86,7 @@ const paths: Record<string, React.ReactNode> = {
     </>
   ),
   hash: <path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18" />,
+  send: <path d="M14.54 21.69a.5.5 0 0 0 .94-.03l6.5-19a.5.5 0 0 0-.64-.63l-19 6.5a.5.5 0 0 0-.02.93l7.93 3.18a2 2 0 0 1 1.11 1.11zM21.85 2.15 10.91 13.09" />,
 };
 
 export type IconName = keyof typeof paths;

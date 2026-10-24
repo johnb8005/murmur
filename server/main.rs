@@ -12,6 +12,7 @@ mod links;
 mod preview;
 mod r2;
 mod router;
+mod slack;
 mod webauthn;
 
 use std::sync::Arc;

@@ -24,6 +24,7 @@ use crate::links::{
     normalize_tag, now_iso, post_tags,
 };
 use crate::preview::{ensure_previews, previews_for, prune_previews, refresh_preview};
+use crate::slack::{self, SlackSent, SlackWebhook};
 
 // ---------- context ----------
 
@@ -324,12 +325,28 @@ pub struct CreateIn {
     pub image_width: Option<u32>,
     #[serde(default, deserialize_with = "lenient_u32")]
     pub image_height: Option<u32>,
+    /// ids of my Slack webhooks to send the post to as well (not with `private`)
+    #[serde(default)]
+    pub slack: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Type)]
 pub struct CreateOut {
     pub post: Post,
     pub previews: HashMap<String, Option<String>>,
+    /// one entry per Slack webhook asked for, with the error if sending failed
+    pub slack: Vec<SlackSent>,
+}
+
+#[derive(Serialize, Deserialize, Type)]
+pub struct WebhookIn {
+    pub name: String,
+    pub url: String,
+}
+
+#[derive(Serialize, Deserialize, Type)]
+pub struct SendOut {
+    pub error: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Type)]
@@ -938,6 +955,15 @@ async fn create(a: Authed, input: CreateIn) -> std::result::Result<CreateOut, OR
     {
         return Err(ORPCError::bad_request("bad tag list"));
     }
+    let slack_ids = input.slack.unwrap_or_default();
+    if !slack_ids.is_empty() && input.private.unwrap_or(false) {
+        return Err(ORPCError::bad_request(
+            "private murmurs are not sent to Slack",
+        ));
+    }
+    let hooks = slack::resolve(app.db(), &a.user.id, &slack_ids)
+        .await
+        .map_err(guard)?;
     let id = auth::new_id();
     let (link, reference) = extract_links(&text);
     let tags = post_tags(&text, &extra);
@@ -999,7 +1025,12 @@ async fn create(a: Authed, input: CreateIn) -> std::result::Result<CreateOut, OR
     .into_iter()
     .next()
     .ok_or_else(|| ORPCError::internal_server_error("post vanished"))?;
-    Ok(CreateOut { post, previews })
+    let slack = slack::cross_post(app, &post, hooks).await;
+    Ok(CreateOut {
+        post,
+        previews,
+        slack,
+    })
 }
 
 async fn remove(a: Authed, input: IdIn) -> std::result::Result<DeletedOut, ORPCError> {
@@ -1149,6 +1180,47 @@ async fn get_user(a: Authed, input: UserIn) -> std::result::Result<UserPostsOut,
     Ok(UserPostsOut { user, posts })
 }
 
+// ---------- slack ----------
+
+async fn slack_list(a: Authed, _: ()) -> std::result::Result<Vec<SlackWebhook>, ORPCError> {
+    slack::list(a.ctx.db(), &a.user.id).await.map_err(internal)
+}
+
+async fn slack_add(a: Authed, input: WebhookIn) -> std::result::Result<SlackWebhook, ORPCError> {
+    slack::add(&a.ctx.app, &a.user.id, &input.name, &input.url)
+        .await
+        .map_err(guard)
+}
+
+async fn slack_remove(a: Authed, input: IdIn) -> std::result::Result<DeletedOut, ORPCError> {
+    Ok(DeletedOut {
+        deleted: slack::remove(a.ctx.db(), &a.user.id, &input.id)
+            .await
+            .map_err(internal)?,
+    })
+}
+
+async fn slack_test(a: Authed, input: IdIn) -> std::result::Result<SendOut, ORPCError> {
+    let app = &a.ctx.app;
+    let hooks = slack::resolve(app.db(), &a.user.id, &[input.id])
+        .await
+        .map_err(guard)?;
+    let (_, url) = hooks
+        .into_iter()
+        .next()
+        .ok_or_else(|| ORPCError::not_found("unknown Slack webhook"))?;
+    let text = format!(
+        "{} is connected: @{}'s murmurs can be sent here. <{}|Open {}>",
+        crate::links::APP_NAME,
+        a.user.username,
+        app.site_url,
+        crate::links::APP_NAME
+    );
+    Ok(SendOut {
+        error: slack::send(app, &url, &text).await,
+    })
+}
+
 // ---------- previews ----------
 
 async fn refresh(a: Authed, input: RefreshIn) -> std::result::Result<RefreshOut, ORPCError> {
@@ -1240,7 +1312,7 @@ pub fn build_router() -> Router<Ctx> {
                 .input(specta::<Option<ListIn>>()).output(specta::<Vec<Post>>()).handler(list),
             "get" => authed().route(Route::get("/posts/{id}").summary("One post with its comments"))
                 .input(specta::<IdIn>()).output(specta::<PostOut>()).handler(get),
-            "create" => authed().route(Route::post("/posts").summary("Post. Tags come from #hashtags in the text and/or `tags`; `private` keeps it to yourself; `image` (multipart) attaches a picture, then `text` may be empty"))
+            "create" => authed().route(Route::post("/posts").summary("Post. Tags come from #hashtags in the text and/or `tags`; `private` keeps it to yourself; `image` (multipart) attaches a picture, then `text` may be empty; `slack` lists webhook ids to send it to as well"))
                 .input(specta::<CreateIn>()).output(specta::<CreateOut>()).handler(create),
             "delete" => authed().route(Route::delete("/posts/{id}").summary("Delete my post (the owner may delete any)"))
                 .input(specta::<IdIn>()).output(specta::<DeletedOut>()).handler(remove),
@@ -1255,6 +1327,16 @@ pub fn build_router() -> Router<Ctx> {
         "users" => {
             "get" => authed().route(Route::get("/users/{username}").summary("A user and their posts (private ones only when they are you)"))
                 .input(specta::<UserIn>()).output(specta::<UserPostsOut>()).handler(get_user),
+        },
+        "slack" => {
+            "list" => authed().route(Route::get("/slack/webhooks").summary("My Slack webhooks (URLs stay on the server)"))
+                .output(specta::<Vec<SlackWebhook>>()).handler(slack_list),
+            "add" => authed().route(Route::post("/slack/webhooks").summary("Add a Slack incoming webhook to send murmurs to"))
+                .input(specta::<WebhookIn>()).output(specta::<SlackWebhook>()).handler(slack_add),
+            "remove" => authed().route(Route::delete("/slack/webhooks/{id}").summary("Remove one of my Slack webhooks"))
+                .input(specta::<IdIn>()).output(specta::<DeletedOut>()).handler(slack_remove),
+            "test" => authed().route(Route::post("/slack/webhooks/{id}/test").summary("Send a test message to one of my Slack webhooks"))
+                .input(specta::<IdIn>()).output(specta::<SendOut>()).handler(slack_test),
         },
         "previews" => {
             "refresh" => authed().route(Route::post("/previews/refresh").summary("Re-capture the preview of a link in one of my posts"))

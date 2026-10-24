@@ -19,9 +19,17 @@ export type CreateIn = { text?: string; tags?: string[] | null; private?: boolea
 /**
  * pixel size of `image`, as measured by the client (layout hint only)
  */
-imageWidth?: number | null; imageHeight?: number | null }
+imageWidth?: number | null; imageHeight?: number | null; 
+/**
+ * ids of my Slack webhooks to send the post to as well (not with `private`)
+ */
+slack?: string[] | null }
 
-export type CreateOut = { post: Post; previews: Partial<{ [key in string]: string | null }> }
+export type CreateOut = { post: Post; previews: Partial<{ [key in string]: string | null }>; 
+/**
+ * one entry per Slack webhook asked for, with the error if sending failed
+ */
+slack: SlackSent[] }
 
 export type DeletedOut = { deleted: boolean }
 
@@ -94,6 +102,19 @@ export type RefreshOut = { error: string | null }
 
 export type RegisterIn = { challengeId: string; response: any; deviceName?: string | null }
 
+export type SendOut = { error: string | null }
+
+/**
+ * What happened to one webhook when a murmur went out.
+ */
+export type SlackSent = { id: string; name: string; error: string | null }
+
+export type SlackWebhook = { id: string; name: string; 
+/**
+ * enough of the URL to tell webhooks apart, not enough to use it
+ */
+hint: string; createdAt: string }
+
 export type StatusOut = { user: Author | null }
 
 export type TagCount = { tag: string; count: number }
@@ -107,6 +128,8 @@ export type UserOut = { user: Author }
 export type UserPostsOut = { user: Author; posts: Post[] }
 
 export type UsernameIn = { username: string }
+
+export type WebhookIn = { name: string; url: string }
 
 export type Procedures = {
   auth: {
@@ -142,6 +165,12 @@ export type Procedures = {
   }
   previews: {
     refresh: Client<Record<never, never>, RefreshIn, RefreshOut, Error>
+  }
+  slack: {
+    add: Client<Record<never, never>, WebhookIn, SlackWebhook, Error>
+    list: Client<Record<never, never>, void, SlackWebhook[], Error>
+    remove: Client<Record<never, never>, IdIn, DeletedOut, Error>
+    test: Client<Record<never, never>, IdIn, SendOut, Error>
   }
   users: {
     get: Client<Record<never, never>, UserIn, UserPostsOut, Error>
