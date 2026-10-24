@@ -290,6 +290,14 @@ const CREATE_TABLES: &[&str] = &[
        error       TEXT,
        fetched_at  TEXT NOT NULL
      )",
+    "CREATE TABLE IF NOT EXISTS slack_webhooks (
+       id         TEXT PRIMARY KEY,
+       user_id    TEXT NOT NULL,
+       name       TEXT NOT NULL,
+       url        TEXT NOT NULL,
+       created_at TEXT NOT NULL
+     )",
+    "CREATE INDEX IF NOT EXISTS slack_webhooks_user ON slack_webhooks (user_id, created_at)",
 ];
 
 /// Columns added after a table first shipped. Covers databases from the single-admin version.

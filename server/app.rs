@@ -21,6 +21,8 @@ pub struct App {
     /// public origin without a trailing slash: links in feeds and Open Graph tags
     pub site_url: String,
     pub admin_token: Option<String>,
+    /// hosts Slack webhook URLs may point at (slack.rs)
+    pub slack_hosts: Vec<String>,
     pub dist: PathBuf,
     pub build: BuildInfo,
     pub started: Instant,
@@ -48,6 +50,7 @@ impl App {
             site,
             site_url,
             admin_token: env("ADMIN_TOKEN"),
+            slack_hosts: crate::slack::hosts_from_env(),
             dist,
             build: BuildInfo {
                 sha: env("GIT_SHA"),

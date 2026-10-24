@@ -2,7 +2,8 @@
 // device A, mint a device link from A's profile (after a passkey check on A), open it on device B (a
 // separate browser context with its own authenticator), finish there, confirm B is signed in with a
 // second passkey and that A noticed. Also: the timeline is members-only, the feed token lets a
-// reader in, and a device link cannot be minted with the session cookie alone.
+// reader in, a device link cannot be minted with the session cookie alone, and a murmur can go to
+// a Slack webhook (a fake Slack started here, allowed through SLACK_WEBHOOK_HOSTS).
 //
 // Run against a built app and server: `bun run build && cargo build --release`, then `bun test/e2e.ts`
 // (it starts the server itself; MURMUR_BIN overrides the binary path).
@@ -12,8 +13,20 @@ import { chromium, type Page } from "playwright";
 const PORT = 8090;
 const ORIGIN = `http://localhost:${PORT}`;
 
+// a stand-in for hooks.slack.com: records what it is sent
+const slackHits: { path: string; text: string }[] = [];
+const fakeSlack = Bun.serve({
+  port: 8091,
+  async fetch(req) {
+    const body = (await req.json()) as { text: string };
+    slackHits.push({ path: new URL(req.url).pathname, text: body.text });
+    return new Response("ok");
+  },
+});
+const SLACK = `http://localhost:${fakeSlack.port}`;
+
 const server = Bun.spawn([process.env.MURMUR_BIN || "target/release/murmur"], {
-  env: { ...process.env, PORT: String(PORT), SITE_URL: ORIGIN, TURSO_DATABASE_URL: `file:${process.cwd()}/test/e2e.db` },
+  env: { ...process.env, PORT: String(PORT), SITE_URL: ORIGIN, TURSO_DATABASE_URL: `file:${process.cwd()}/test/e2e.db`, SLACK_WEBHOOK_HOSTS: "localhost" },
   stdout: "inherit",
   stderr: "inherit",
 });
@@ -153,6 +166,40 @@ try {
   expect((await fetch(`${ORIGIN}${picSrc}?token=${encodeURIComponent(feedUrls.token)}`)).status === 200, "the feed token opens the picture too");
   expect((await fetch(`${ORIGIN}/feed.xml?token=wrong`)).status === 401, "a wrong feed token is refused");
 
+  // Slack: a webhook is added in settings (only allowed hosts, the URL never comes back), tested, then
+  // picked in the composer; private murmurs cannot go
+  await pa.getByLabel("Name", { exact: true }).fill("e2e channel");
+  await pa.getByLabel("Webhook URL").fill("https://example.com/services/T/B/X");
+  await pa.getByRole("button", { name: "Add webhook" }).click();
+  await pa.getByText(/not a Slack webhook URL/).waitFor();
+  expect(true, "a webhook URL on another host is refused");
+  await pa.getByLabel("Webhook URL").fill(`${SLACK}/services/T0/B0/secretAbCd`);
+  await pa.getByRole("button", { name: "Add webhook" }).click();
+  await pa.getByText("localhost/…AbCd").waitFor();
+  const hooks = await pa.evaluate(async () => (await (await fetch("/api/slack/webhooks")).json()) as { id: string; name: string; hint: string }[]);
+  expect(hooks.length === 1 && hooks[0]!.name === "e2e channel" && !JSON.stringify(hooks).includes("secret"), "the webhook is listed by name and hint, without its URL");
+  await pa.getByRole("button", { name: "Test", exact: true }).click();
+  await pa.getByText('Test message sent to "e2e channel".').waitFor();
+  expect(slackHits.length === 1 && slackHits[0]!.path === "/services/T0/B0/secretAbCd" && slackHits[0]!.text.includes("is connected"), "the test message reached Slack");
+  await pa.goto(`${ORIGIN}/`);
+  await pa.getByRole("switch", { name: "Slack" }).click();
+  await pa.getByPlaceholder("Something worth sharing?").fill("to slack & back <3");
+  await pa.getByRole("button", { name: "Murmur", exact: true }).click();
+  const slackCard = pa.locator("article", { hasText: "to slack & back" }).first();
+  await slackCard.waitFor();
+  const slackId = (await slackCard.getAttribute("id"))!;
+  expect(
+    slackHits.length === 2 && slackHits[1]!.text.startsWith("to slack &amp; back &lt;3") && slackHits[1]!.text.includes(`<${ORIGIN}/p/${slackId}|Open in Murmur>`),
+    "the murmur went to Slack, escaped, with a link back",
+  );
+  await pa.getByRole("switch", { name: "Everyone" }).click();
+  expect(await pa.getByRole("switch", { name: "Slack" }).isDisabled(), "Slack is off for a private murmur");
+  const privateToSlack = await pa.evaluate(
+    async (id) => (await fetch("/api/posts", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "x", private: true, slack: [id] }) })).status,
+    hooks[0]!.id,
+  );
+  expect(privateToSlack === 400 && slackHits.length === 2, "the API refuses to send a private murmur to Slack");
+
   // a device link needs a fresh passkey assertion: the session cookie alone gets nothing
   const cookieOnly = await pa.evaluate(async () => {
     const r = await fetch("/api/auth/link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ challengeId: "nope", response: {} }) });
@@ -226,4 +273,5 @@ try {
 } finally {
   await browser.close();
   server.kill();
+  fakeSlack.stop();
 }
