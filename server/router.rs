@@ -68,7 +68,7 @@ impl Ctx {
     }
     async fn resolve_user(&self) -> Result<Option<Author>> {
         if let (Some(t), Some(admin)) = (&self.token, &self.app.admin_token)
-            && t == admin
+            && constant_time_eq(t.as_bytes(), admin.as_bytes())
         {
             return auth::user_by_username(self.db(), &self.site().owner_username).await;
         }
@@ -80,6 +80,11 @@ impl Ctx {
             .append("set-cookie", &auth::session_cookie(self.site(), &id));
         Ok(())
     }
+}
+
+/// Compares secrets without leaking, through timing, how much of a guess was right.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 /// Requires a signed-in user.
@@ -707,11 +712,10 @@ async fn login(ctx: Ctx, input: AssertionIn) -> std::result::Result<UserOut, ORP
     {
         Ok(u) => u,
         Err(e) => {
-            let msg = e
-                .downcast_ref::<AuthError>()
-                .map(|a| a.0.clone())
-                .unwrap_or_else(|| format!("{e:#}"));
-            return Err(ORPCError::unauthorized(msg));
+            return Err(match e.downcast_ref::<AuthError>() {
+                Some(a) => ORPCError::unauthorized(a.0.clone()),
+                None => internal(e), // database errors are logged, not shown
+            });
         }
     };
     ctx.start_session(&user).await.map_err(internal)?;

@@ -9,6 +9,7 @@ mod auth;
 mod db;
 mod http;
 mod links;
+mod net;
 mod preview;
 mod r2;
 mod router;

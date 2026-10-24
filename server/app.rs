@@ -42,9 +42,7 @@ impl App {
         Ok(App {
             db: Db::open().await?,
             r2: R2::from_env(),
-            http: reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::limited(10))
-                .build()?,
+            http: crate::net::public_client()?,
             site,
             site_url,
             admin_token: env("ADMIN_TOKEN"),

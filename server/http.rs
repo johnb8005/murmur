@@ -9,7 +9,7 @@ use std::sync::{Arc, LazyLock};
 use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect, Response};
-use http::{HeaderMap, Method, StatusCode, Uri, header};
+use http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header};
 
 use crate::app::App;
 use crate::auth::{self, SESSION_COOKIE};
@@ -82,12 +82,41 @@ pub fn app_router(app: Arc<App>) -> axum::Router {
         .route("/previews/{file}", axum::routing::get(preview_image))
         .route("/share", axum::routing::post(share))
         .fallback(fallback)
-        .with_state(app);
+        .with_state(app.clone());
     axum::Router::new()
         .nest("/rpc", rpc)
         .nest("/api", api)
         .merge(pages)
         .layer(axum::middleware::from_fn(res_headers))
+        .layer(axum::middleware::from_fn_with_state(app, guard_requests))
+}
+
+/// Baseline security headers on every response, and a same-origin check on API calls that change
+/// something: the session cookie is SameSite=Lax, which still lets sibling subdomains (same site)
+/// post. Requests without an Origin header (curl with ADMIN_TOKEN) are let through.
+pub async fn guard_requests(State(app): State<Arc<App>>, req: Request, next: Next) -> Response {
+    let path = req.uri().path();
+    let api = path.starts_with("/rpc/") || path.starts_with("/api/");
+    let safe = matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS);
+    if api
+        && !safe
+        && let Some(origin) = req.headers().get(header::ORIGIN)
+        && origin.as_bytes() != app.site.origin.as_bytes()
+    {
+        return text(StatusCode::FORBIDDEN, "cross-origin request refused");
+    }
+    let mut res = next.run(req).await;
+    let h = res.headers_mut();
+    h.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    h.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("same-origin"),
+    );
+    res
 }
 
 #[allow(dead_code)]

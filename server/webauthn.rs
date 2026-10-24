@@ -227,22 +227,35 @@ fn parse_cose(bytes: &[u8]) -> Result<Key> {
             if cose_get(map, -1).and_then(cose_int) != Some(1) {
                 bail!("ES256 needs curve P-256");
             }
+            // fixed sizes: a wrong length would panic in p256 (and panics abort the server)
+            let (x, y) = (cose_bytes(map, -2)?, cose_bytes(map, -3)?);
+            if x.len() != 32 || y.len() != 32 {
+                bail!("ES256 coordinates must be 32 bytes");
+            }
             Ok(Key::Es256 {
-                x: cose_bytes(map, -2)?.to_vec(),
-                y: cose_bytes(map, -3)?.to_vec(),
+                x: x.to_vec(),
+                y: y.to_vec(),
             })
         }
-        (3, -257) => Ok(Key::Rs256 {
-            n: cose_bytes(map, -1)?.to_vec(),
-            e: cose_bytes(map, -2)?.to_vec(),
-        }),
+        (3, -257) => {
+            let (n, e) = (cose_bytes(map, -1)?, cose_bytes(map, -2)?);
+            if n.len() < 256 || n.len() > 512 || e.is_empty() || e.len() > 8 {
+                bail!("RS256 key must be 2048 to 4096 bits");
+            }
+            Ok(Key::Rs256 {
+                n: n.to_vec(),
+                e: e.to_vec(),
+            })
+        }
         (1, -8) => {
             if cose_get(map, -1).and_then(cose_int) != Some(6) {
                 bail!("EdDSA needs Ed25519");
             }
-            Ok(Key::Ed25519 {
-                x: cose_bytes(map, -2)?.to_vec(),
-            })
+            let x = cose_bytes(map, -2)?;
+            if x.len() != 32 {
+                bail!("Ed25519 key must be 32 bytes");
+            }
+            Ok(Key::Ed25519 { x: x.to_vec() })
         }
         _ => bail!("unsupported key type {kty} / algorithm {alg}"),
     }
@@ -493,6 +506,48 @@ mod tests {
             verify_authentication(&RP, "other", &stored, &resp).is_err(),
             "wrong challenge rejected"
         );
+    }
+
+    #[test]
+    fn malformed_keys_are_rejected_not_panicked_on() {
+        let sk = p256::ecdsa::SigningKey::random(&mut rand::thread_rng());
+        let p = sk.verifying_key().to_encoded_point(false);
+        let short = Value::Map(vec![
+            (Value::Integer(1.into()), Value::Integer(2.into())),
+            (Value::Integer(3.into()), Value::Integer((-7).into())),
+            (Value::Integer((-1).into()), Value::Integer(1.into())),
+            (
+                Value::Integer((-2).into()),
+                Value::Bytes(p.x().unwrap()[..31].to_vec()),
+            ),
+            (
+                Value::Integer((-3).into()),
+                Value::Bytes(p.y().unwrap().to_vec()),
+            ),
+        ]);
+        let mut cose = Vec::new();
+        ciborium::ser::into_writer(&short, &mut cose).unwrap();
+        assert!(parse_cose(&cose).is_err());
+
+        // a passkey stored with that key fails sign-in instead of taking the server down
+        let challenge = new_challenge();
+        let cd = client_data("webauthn.get", &challenge);
+        let ad = auth_data(FLAG_UP, 1, None);
+        let stored = StoredPasskey {
+            id: B64.encode(b"c"),
+            public_key: cose,
+            counter: 0,
+            transports: vec![],
+        };
+        let resp = AuthenticationResponse {
+            id: stored.id.clone(),
+            response: AuthenticationInner {
+                client_data_json: B64.encode(&cd),
+                authenticator_data: B64.encode(&ad),
+                signature: B64.encode([0u8; 70]),
+            },
+        };
+        assert!(verify_authentication(&RP, &challenge, &stored, &resp).is_err());
     }
 
     #[test]

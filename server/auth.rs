@@ -271,16 +271,28 @@ async fn read_challenge(db: &Db, id: &str, kind: &str) -> Result<Option<Challeng
         }))
 }
 
-/// One-shot: returns the challenge row and deletes it; fails if unknown, expired or the wrong kind.
+/// One-shot: deletes the challenge row and returns it; fails if unknown, expired or the wrong kind.
+/// The delete is the read, so two requests racing with the same challenge cannot both get it.
 async fn take_challenge(db: &Db, id: &str, kind: &str) -> Result<Challenge> {
-    let row = read_challenge(db, id, kind).await?;
+    let row = db
+        .one(
+            "DELETE FROM challenges WHERE id = ? AND kind = ? AND expires_at >= ? RETURNING challenge, username, user_id, link, expires_at",
+            vec![v(id), v(kind), v(now_iso())],
+        )
+        .await?;
     db.exec(
-        "DELETE FROM challenges WHERE id = ? OR expires_at < ?",
-        vec![v(id), v(now_iso())],
+        "DELETE FROM challenges WHERE expires_at < ?",
+        vec![v(now_iso())],
     )
     .await?;
     match row {
-        Some(c) => Ok(c),
+        Some(r) => Ok(Challenge {
+            challenge: r.req("challenge"),
+            username: r.str("username"),
+            user_id: r.str("user_id"),
+            link: r.str("link"),
+            expires_at: r.req("expires_at"),
+        }),
         None => auth_err("challenge expired, try again"),
     }
 }
@@ -444,6 +456,15 @@ async fn store_verified_passkey(
     device_name: Option<&str>,
 ) -> Result<String> {
     let c = verified_registration(site, challenge, response)?;
+    store_passkey(db, user_id, c, device_name).await
+}
+
+async fn store_passkey(
+    db: &Db,
+    user_id: &str,
+    c: StoredPasskey,
+    device_name: Option<&str>,
+) -> Result<String> {
     db.exec(
         "INSERT INTO passkeys (id, user_id, public_key, counter, transports, name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
         vec![
@@ -559,10 +580,19 @@ pub async fn finish_device_link(
         Some(l) => l,
         None => return auth_err("challenge expired, try again"),
     };
-    let (user, _) = device_link(db, &link).await?; // still valid: not consumed by another device meanwhile
-    store_verified_passkey(db, site, &user.id, &ch.challenge, response, device_name).await?;
-    db.exec("DELETE FROM challenges WHERE id = ?", vec![v(link)])
-        .await?;
+    let c = verified_registration(site, &ch.challenge, response)?;
+    // consume the link before storing: of two devices finishing at once, only one gets in
+    let used = take_challenge(db, &link, "device-link").await;
+    let user = match used.ok().and_then(|l| l.user_id) {
+        Some(id) => user_by_id(db, &id).await?,
+        None => None,
+    };
+    let Some(user) = user else {
+        return auth_err(
+            "this link has expired or was already used; make a new one from your profile",
+        );
+    };
+    store_passkey(db, &user.id, c, device_name).await?;
     Ok(user)
 }
 
